@@ -59,6 +59,13 @@ async function test() {
             console.log('Push Result:', ticketChunk);
           }
           console.log('[PUSH] Test push sent successfully!');
+          
+          // Also save an in-app notification just like the job worker does
+          await pool.query(
+            `INSERT INTO in_app_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`,
+            [user.id, 'Upcoming Subscription Payment', messageText, 'reminder']
+          );
+          console.log('[IN-APP] In-app notification saved to database!');
         } catch (e) {
           console.error('[PUSH] Failed:', e.message);
         }
