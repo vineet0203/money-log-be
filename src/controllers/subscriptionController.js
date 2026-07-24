@@ -11,38 +11,87 @@ const calculateNextBillingDate = (startDate, cycle) => {
   return d.toISOString().split('T')[0];
 };
 
+exports.getSubscriptionStats = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN computed_status = 'Ongoing' THEN 1 ELSE 0 END), 0) as ongoing_count,
+        COALESCE(SUM(CASE WHEN computed_status = 'Upcoming' THEN 1 ELSE 0 END), 0) as upcoming_count,
+        COALESCE(SUM(CASE WHEN computed_status = 'Inactive' THEN 1 ELSE 0 END), 0) as inactive_count,
+        COUNT(*) as total_count
+      FROM (
+        SELECT CASE 
+                  WHEN status = 'cancelled' THEN 'Inactive'
+                  WHEN DATEDIFF(next_billing_date, CURDATE()) <= 7 THEN 'Upcoming'
+                  ELSE 'Ongoing'
+               END as computed_status
+        FROM subscriptions
+        WHERE user_id = ?
+      ) as sub
+    `;
+    const [rows] = await pool.query(query, [req.user.id]);
+    res.status(200).json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching subscription stats:', error);
+    res.status(500).json({ error: 'Failed to fetch subscription stats' });
+  }
+};
+
 exports.getSubscriptions = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 50;
-    const offset = parseInt(req.query.offset) || 0;
-    const upcomingDays = req.query.upcoming_days ? parseInt(req.query.upcoming_days) : null;
+    const limit = parseInt(req.query.limit) || 8;
+    const page = parseInt(req.query.page) || 1;
+    const offset = (page - 1) * limit;
+    const status = req.query.status;
+    const category_id = req.query.category_id;
 
-    let query = `
+    let selectQuery = `
       SELECT s.*, 
              c.name as category_name, 
              c.icon_name as category_icon, 
-             c.color as category_color 
+             c.color as category_color,
+             DATEDIFF(s.next_billing_date, CURDATE()) as days_left,
+             CASE 
+                WHEN s.status = 'cancelled' THEN 'Inactive'
+                WHEN DATEDIFF(s.next_billing_date, CURDATE()) <= 7 THEN 'Upcoming'
+                ELSE 'Ongoing'
+             END as computed_status
       FROM subscriptions s
       LEFT JOIN categories c ON s.category_id = c.id
       WHERE s.user_id = ?
     `;
     let params = [req.user.id];
 
-    if (upcomingDays !== null) {
-      query += ' AND s.next_billing_date >= CURDATE() AND s.next_billing_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)';
-      params.push(upcomingDays);
+    if (category_id && category_id !== 'all') {
+      selectQuery += ` AND s.category_id = ?`;
+      params.push(category_id);
     }
 
-    query += ' ORDER BY s.next_billing_date ASC LIMIT ? OFFSET ?';
+    if (status && status !== 'All') {
+      selectQuery += ` HAVING computed_status = ?`;
+      params.push(status);
+    }
+
+    // Wrap for count
+    let countQuery = `SELECT COUNT(*) as total FROM (${selectQuery}) as derived_table`;
+    let countParams = [...params];
+
+    selectQuery += ' ORDER BY next_billing_date ASC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
-    const [rows] = await pool.query(query, params);
-    
-    const nextOffset = rows.length === limit ? offset + limit : null;
+    const [rows] = await pool.query(selectQuery, params);
+    const [countRows] = await pool.query(countQuery, countParams);
+    const totalItems = countRows[0].total;
+    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
     
     res.status(200).json({
       data: rows,
-      nextOffset
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalItems,
+        itemsPerPage: limit
+      }
     });
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
@@ -57,6 +106,8 @@ exports.addSubscription = async (req, res) => {
     return res.status(400).json({ error: 'Name, amount, and start_date are required' });
   }
 
+  const trimmedName = name.trim();
+
   const cycle = billing_cycle || 'monthly';
   const subStatus = status || 'active';
   const subSource = source || 'Manual Added';
@@ -66,11 +117,22 @@ exports.addSubscription = async (req, res) => {
   try {
     await connection.beginTransaction();
 
+    // Check for duplicate name
+    const [existing] = await connection.query(
+      'SELECT id FROM subscriptions WHERE user_id = ? AND LOWER(name) = ?',
+      [req.user.id, trimmedName.toLowerCase()]
+    );
+
+    if (existing.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'A subscription with this name already exists' });
+    }
+
     const [result] = await connection.query(
       `INSERT INTO subscriptions 
       (user_id, name, amount, billing_cycle, start_date, next_billing_date, status, source, category_id) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.id, name, amount, cycle, start_date, next_billing_date, subStatus, subSource, category_id || null]
+      [req.user.id, trimmedName, amount, cycle, start_date, next_billing_date, subStatus, subSource, category_id || null]
     );
 
     const subscriptionId = result.insertId;

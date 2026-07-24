@@ -9,6 +9,14 @@ CREATE TABLE `accounts` (
   `expiry_date` varchar(10) DEFAULT NULL,
   `provider` varchar(100) DEFAULT NULL,
   `external_id` varchar(255) DEFAULT NULL,
+  `balance` decimal(15,2) NOT NULL DEFAULT 0.00,
+  `available_balance` decimal(15,2) DEFAULT NULL,
+  `credit_limit` decimal(15,2) DEFAULT NULL,
+  `currency` varchar(10) DEFAULT 'USD',
+  `logo` text,
+  `color` varchar(50) DEFAULT '#000000',
+  `plaid_raw_data` json DEFAULT NULL,
+  `last_balance_sync` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -154,9 +162,57 @@ CREATE TABLE `user_push_tokens` (
   CONSTRAINT `user_push_tokens_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+DROP TABLE IF EXISTS `plaid_items`;
+CREATE TABLE `plaid_items` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `item_id` varchar(255) NOT NULL UNIQUE,
+  `access_token` varchar(255) NOT NULL,
+  `institution_id` varchar(255) DEFAULT NULL,
+  `institution_name` varchar(255) DEFAULT NULL,
+  `transaction_cursor` varchar(255) DEFAULT NULL,
+  `status` enum('good', 'login_required') DEFAULT 'good',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `user_id` (`user_id`),
+  CONSTRAINT `plaid_items_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- --------------------------------------------------------
 -- Alter command
 -- Run this in production to migrate from the old schema
 -- that included Firebase Authentication.
 -- --------------------------------------------------------
 -- ALTER TABLE `users` DROP COLUMN `firebase_uid`;
+
+DROP TABLE IF EXISTS `account_transactions`;
+CREATE TABLE `account_transactions` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `account_id` int NOT NULL,
+  `provider_transaction_id` varchar(255) NOT NULL UNIQUE,
+  `amount` decimal(15,2) NOT NULL,
+  `date` date NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `merchant_name` varchar(255) DEFAULT NULL,
+  `logo_url` varchar(255) DEFAULT NULL,
+  `currency` varchar(10) DEFAULT 'USD',
+  `payment_channel` varchar(50) DEFAULT NULL,
+  `primary_category` varchar(100) DEFAULT NULL,
+  `detailed_category` varchar(100) DEFAULT NULL,
+  `pending` tinyint(1) DEFAULT '0',
+  `datetime` datetime DEFAULT NULL,
+  `authorized_date` date DEFAULT NULL,
+  `authorized_datetime` datetime DEFAULT NULL,
+  `location` json DEFAULT NULL,
+  `payment_meta` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `user_id` (`user_id`),
+  KEY `account_id` (`account_id`),
+  CONSTRAINT `account_tx_user_fk` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `account_tx_account_fk` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
