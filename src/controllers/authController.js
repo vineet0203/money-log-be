@@ -194,19 +194,12 @@ exports.refreshToken = async (req, res) => {
     const session = rows[0];
     const userId = session.user_id;
 
-    // Delete the old refresh token (rotation)
-    await pool.query('DELETE FROM refresh_tokens WHERE id = ?', [session.id]);
+    // Do not delete the old refresh token (disable strict rotation to prevent network desyncs)
+    // We simply issue a new access token and reuse the same refresh token.
+    const accessToken = jwt.sign({ id: userId }, process.env.JWT_ACCESS_SECRET, { expiresIn: '15m' });
 
-    // Generate new tokens
-    const newTokens = generateTokens(userId);
-    const newTokenHash = crypto.createHash('sha256').update(newTokens.refreshToken).digest('hex');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    await pool.query(
-      'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
-      [userId, newTokenHash, expiresAt]
-    );
+    // Optionally extend the refresh token expiry in the DB here
+    await pool.query('UPDATE refresh_tokens SET expires_at = DATE_ADD(NOW(), INTERVAL 7 DAY) WHERE id = ?', [session.id]);
 
     if (clientType === 'web') {
       const cookieOptions = {
@@ -214,15 +207,15 @@ exports.refreshToken = async (req, res) => {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
       };
-      res.cookie('accessToken', newTokens.accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
-      res.cookie('refreshToken', newTokens.refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
+      res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+      res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
       
       return res.status(200).json({ message: 'Token refreshed successfully' });
     }
 
     res.status(200).json({
-      accessToken: newTokens.accessToken,
-      refreshToken: newTokens.refreshToken
+      accessToken: accessToken,
+      refreshToken: refreshToken
     });
   } catch (error) {
     console.error('Error refreshing token:', error);

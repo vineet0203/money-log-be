@@ -45,17 +45,17 @@ exports.updateProfile = async (req, res) => {
 
     if (global_sms_enabled !== undefined) {
       updates.push('global_sms_enabled = ?');
-      values.push(global_sms_enabled === 'true' || global_sms_enabled === true);
+      values.push(global_sms_enabled === 'true' || global_sms_enabled === true || global_sms_enabled === 1 || global_sms_enabled === '1');
     }
 
     if (global_email_enabled !== undefined) {
       updates.push('global_email_enabled = ?');
-      values.push(global_email_enabled === 'true' || global_email_enabled === true);
+      values.push(global_email_enabled === 'true' || global_email_enabled === true || global_email_enabled === 1 || global_email_enabled === '1');
     }
 
     if (global_push_enabled !== undefined) {
       updates.push('global_push_enabled = ?');
-      values.push(global_push_enabled === 'true' || global_push_enabled === true);
+      values.push(global_push_enabled === 'true' || global_push_enabled === true || global_push_enabled === 1 || global_push_enabled === '1');
     }
 
     if (timezone !== undefined) {

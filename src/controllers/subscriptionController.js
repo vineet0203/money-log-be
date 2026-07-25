@@ -18,13 +18,23 @@ exports.getSubscriptionStats = async (req, res) => {
         COALESCE(SUM(CASE WHEN computed_status = 'Ongoing' THEN 1 ELSE 0 END), 0) as ongoing_count,
         COALESCE(SUM(CASE WHEN computed_status = 'Upcoming' THEN 1 ELSE 0 END), 0) as upcoming_count,
         COALESCE(SUM(CASE WHEN computed_status = 'Inactive' THEN 1 ELSE 0 END), 0) as inactive_count,
-        COUNT(*) as total_count
+        COUNT(*) as total_count,
+        COALESCE(SUM(CASE WHEN billing_cycle = 'monthly' THEN 1 ELSE 0 END), 0) as total_monthly_count,
+        COALESCE(SUM(CASE WHEN billing_cycle = 'yearly' THEN 1 ELSE 0 END), 0) as total_yearly_count,
+        COALESCE(SUM(CASE WHEN days_left < 0 AND status != 'cancelled' THEN 1 ELSE 0 END), 0) as overdue_count,
+        COALESCE(SUM(CASE WHEN days_left >= 0 AND days_left <= 7 AND status != 'cancelled' THEN 1 ELSE 0 END), 0) as within_7_days_count,
+        COALESCE(SUM(CASE WHEN days_left >= 8 AND days_left <= 30 AND status != 'cancelled' THEN 1 ELSE 0 END), 0) as within_8_30_days_count,
+        COALESCE(SUM(CASE WHEN days_left >= 30 AND days_left <= 45 AND billing_cycle = 'yearly' AND status != 'cancelled' THEN 1 ELSE 0 END), 0) as yearly_30_45_days_count
       FROM (
-        SELECT CASE 
-                  WHEN status = 'cancelled' THEN 'Inactive'
-                  WHEN DATEDIFF(next_billing_date, CURDATE()) <= 7 THEN 'Upcoming'
-                  ELSE 'Ongoing'
-               END as computed_status
+        SELECT 
+          status,
+          billing_cycle,
+          DATEDIFF(next_billing_date, CURDATE()) as days_left,
+          CASE 
+            WHEN status = 'cancelled' THEN 'Inactive'
+            WHEN DATEDIFF(next_billing_date, CURDATE()) <= 7 THEN 'Upcoming'
+            ELSE 'Ongoing'
+          END as computed_status
         FROM subscriptions
         WHERE user_id = ?
       ) as sub
@@ -169,6 +179,14 @@ exports.updateSubscription = async (req, res) => {
     const newCycle = billing_cycle || currentSub.billing_cycle;
     const newNextBillingDate = calculateNextBillingDate(newStartDate, newCycle);
 
+    // Validate reminder_days
+    if (reminder_days !== undefined) {
+      const maxReminderDays = newCycle === 'yearly' ? 30 : 15;
+      if (reminder_days > maxReminderDays) {
+        return res.status(400).json({ error: `Reminder days cannot exceed ${maxReminderDays} days for a ${newCycle} subscription.` });
+      }
+    }
+
     // If category_id is explicitly passed as null, we should update it to null
     let updateQuery = `UPDATE subscriptions SET 
         name = COALESCE(?, name), 
@@ -242,9 +260,14 @@ exports.getSubscriptionDetails = async (req, res) => {
 
     const [transactions] = await pool.query('SELECT * FROM transactions WHERE subscription_id = ? ORDER BY date DESC', [id]);
 
+    const transactionsWithUrls = transactions.map(tx => ({
+      ...tx,
+      receipt_url: tx.receipt_url ? (tx.receipt_url.startsWith('http') ? tx.receipt_url : `${req.protocol}://${req.get('host')}${tx.receipt_url}`) : null
+    }));
+
     res.status(200).json({
       subscription: subscriptions[0],
-      transactions: transactions
+      transactions: transactionsWithUrls
     });
   } catch (error) {
     console.error('Error fetching subscription details:', error);
