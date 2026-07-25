@@ -10,4 +10,10 @@ router.post('/', accountController.addAccount);
 router.put('/:id', accountController.updateAccount);
 router.delete('/:id', accountController.deleteAccount);
 
+// Get specific account transaction details by local ID
+router.get('/transactions/:txnId', verifyToken, accountController.getAccountTransactionById);
+
+// Get paginated transactions for a specific account
+router.get('/:id/transactions', verifyToken, accountController.getAccountTransactions);
+
 module.exports = router;

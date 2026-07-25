@@ -1,0 +1,39 @@
+Part A — Backend Steps (Sandbox)
+
+Set up your server project (Node.js/Express, or your preferred stack) with the Plaid Node SDK, configured to point at sandbox.plaid.com using your Sandbox client_id/secret.
+Create your database tables: users (already exists from your auth system), plaid_items (stores access_token encrypted, item_id, institution name, per user), accounts (linked accounts/cards, referencing plaid_items), transactions (synced transaction data).
+Build an endpoint e.g. POST /api/plaid/create-link-token — when called by the app, your server calls Plaid's /link/token/create with the logged-in user's internal ID, and returns the resulting link_token to the app.
+Build a callback endpoint e.g. POST /api/plaid/exchange-token — the app calls this after Link succeeds, passing the public_token; your server exchanges it via /item/public_token/exchange, then encrypts and stores the returned access_token + item_id against that user's row.
+Build a "get accounts" endpoint e.g. GET /api/accounts — your server looks up all plaid_items for the logged-in user, calls /accounts/get for each, and returns a combined list to the app.
+Build a "get balance" endpoint e.g. GET /api/accounts/:id/balance — server calls /accounts/balance/get using the stored access_token for that account's item, on demand.
+Build a transaction sync job — a background worker that periodically calls /transactions/sync for every stored item and writes new/updated/removed transactions into your transactions table.
+Build a "get transaction history" endpoint — this queries your own transactions table directly (fast, no Plaid call needed per view), with date-range filters.
+Build a webhook receiver endpoint e.g. POST /api/plaid/webhook — Plaid calls this whenever new data is ready or a connection breaks; use it to trigger the sync job instead of polling constantly.
+Add authentication middleware so every one of these endpoints only acts on the currently logged-in user's own data — this is what makes it multi-tenant/safe for N users.
+
+Part B — Frontend Steps (Expo/React Native)
+
+Add the official Plaid Link SDK (react-native-plaid-link-sdk). Important Expo-specific note: this SDK includes native iOS/Android code, so it will not run inside plain Expo Go — you need to either run expo prebuild to generate native projects, or build a custom Expo Dev Client (via EAS Build) that includes this native module.
+On the "Add Account" screen, call your backend's create-link-token endpoint to get a link_token.
+Open Plaid Link using that token via the SDK's create/open functions (or the PlaidLink component on older SDK versions) — this launches the native Plaid Link UI as a modal/full-screen flow inside your app.
+Handle onSuccess — when the user finishes linking, the SDK gives you a public_token; immediately send it to your backend's exchange-token endpoint.
+Handle onExit — if the user backs out or an error occurs, show an appropriate message; check error_code if present.
+Build the Accounts screen — call your backend's /api/accounts endpoint on load, and display each linked account/card (grouped by institution, per the multi-Item model discussed earlier).
+Build the Balance screen — call /api/accounts/:id/balance when the user taps into an account; no Link flow involved, just a normal API call.
+Build the Transaction History screen — call your backend's history endpoint with date-range filters; this hits your own database, not Plaid, so it's fast.
+Add an "Add Another Bank" button anywhere in the account list — repeats steps 12–15 for a second institution under the same user.
+
+Part C — Why the user never re-verifies (the actual mechanism)
+
+The access_token from step 4 is permanent (until revoked or broken) — it's stored server-side, tied to the user, and reused for every single future balance/transaction call. The mobile app never stores or handles this token directly; it only ever talks to your backend, which holds it securely.
+Every time the user opens the Balance or History screen in the future — tomorrow, next month, next year — your app simply calls your own backend, which uses the already-stored access_token to ask Plaid for fresh data. No widget, no login screen, no user action — this is what makes "check anytime" work.
+The only time the user sees a login prompt again is the rare update-mode exception (bank password changed, re-authentication required) — handled by catching Plaid's ITEM_LOGIN_REQUIRED webhook/error and prompting Link again just for that one broken connection.
+
+Part D — Testing this whole flow for N users, in Sandbox
+
+Create multiple test users in your own system (sign up 2–3 fake accounts).
+Link each one using Plaid's Sandbox test bank login (a generic test username/password Plaid provides) — confirm each user's access_token is stored separately and isolated (User A can never see User B's accounts).
+Link a second bank under the same test user to confirm the multi-Item model works end-to-end in your schema and UI.
+Simulate the passage of time — call your balance/history endpoints repeatedly across multiple sessions/app restarts to confirm no re-linking is ever triggered for normal use.
+Use Plaid's Sandbox-only webhook trigger (/sandbox/item/fire_webhook) to simulate new transactions arriving and confirm your sync job and webhook receiver actually update the database correctly.
+

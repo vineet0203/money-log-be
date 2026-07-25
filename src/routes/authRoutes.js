@@ -18,6 +18,21 @@ router.post('/send-otp', otpLimiter, validate(sendOtpSchema), authController.sen
 router.post('/verify-otp', validate(verifyOtpSchema), authController.verifyOtp);
 router.post('/refresh-token', validate(refreshTokenSchema), authController.refreshToken);
 router.post('/complete-profile', verifyToken, validate(completeProfileSchema), authController.completeProfile);
-router.post('/logout', verifyToken, authController.logout);
+// Logout must remain reachable when the access token has expired so it can
+// clear the HttpOnly cookies and invalidate the refresh-token session.
+router.post('/logout', authController.logout);
+
+// Failsafe route to force clear cookies if token is expired/invalid
+router.post('/clear-cookies', (req, res) => {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/',
+  };
+  res.cookie('accessToken', '', { ...cookieOptions, maxAge: 0 });
+  res.cookie('refreshToken', '', { ...cookieOptions, maxAge: 0 });
+  res.status(200).json({ message: 'Cookies cleared' });
+});
 
 module.exports = router;

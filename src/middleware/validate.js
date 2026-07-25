@@ -10,10 +10,11 @@ const validate = (schema) => (req, res, next) => {
     next();
   } catch (error) {
     if (error instanceof ZodError) {
+      const issues = error.errors || error.issues || [];
       return res.status(400).json({
         error: 'Validation failed',
-        details: error.errors.map(e => ({
-          path: e.path.join('.'),
+        details: issues.map(e => ({
+          path: e.path ? e.path.join('.') : '',
           message: e.message
         }))
       });

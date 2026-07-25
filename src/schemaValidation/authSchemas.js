@@ -26,7 +26,9 @@ const completeProfileSchema = z.object({
 // Schema for refreshing token
 const refreshTokenSchema = z.object({
   body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token is required')
+    // Web clients send this token in an HttpOnly cookie. Mobile clients still
+    // send it in the request body and are validated in the controller.
+    refreshToken: z.string().min(1, 'Refresh token is required').optional()
   })
 });
 

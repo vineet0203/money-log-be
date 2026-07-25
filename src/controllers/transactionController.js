@@ -53,8 +53,13 @@ exports.getTransactions = async (req, res) => {
     
     const nextOffset = transactions.length === limit ? offset + limit : null;
     
+    const transactionsWithUrls = transactions.map(tx => ({
+      ...tx,
+      receipt_url: tx.receipt_url ? (tx.receipt_url.startsWith('http') ? tx.receipt_url : `${req.protocol}://${req.get('host')}${tx.receipt_url}`) : null
+    }));
+    
     res.status(200).json({
-      data: transactions,
+      data: transactionsWithUrls,
       nextOffset
     });
   } catch (error) {
@@ -75,7 +80,40 @@ exports.createTransaction = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // 1. Insert Transaction
+    // 1. If it's a subscription payment, validate date and calculate new billing date first
+    let newNextBillingDate = null;
+    let subToUpdate = null;
+
+    if (subscription_id) {
+      const [existingSubs] = await connection.query(
+        'SELECT * FROM subscriptions WHERE id = ? AND user_id = ?',
+        [subscription_id, req.user.id]
+      );
+
+      if (existingSubs.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'Subscription not found' });
+      }
+
+      subToUpdate = existingSubs[0];
+      
+      // Calculate days difference
+      const today = new Date();
+      const nextBillingDate = new Date(subToUpdate.next_billing_date);
+      const diffTime = nextBillingDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      const maxDays = subToUpdate.billing_cycle === 'yearly' ? 30 : 15;
+      
+      if (diffDays > maxDays) {
+        await connection.rollback();
+        return res.status(400).json({ error: `Too early to pay. You can only pay up to ${maxDays} days before the due date for ${subToUpdate.billing_cycle} subscriptions.` });
+      }
+
+      newNextBillingDate = calculateNextBillingDate(subToUpdate.next_billing_date, subToUpdate.billing_cycle);
+    }
+
+    // 2. Insert Transaction
     const [result] = await connection.query(
       `INSERT INTO transactions 
       (user_id, title, amount, type, date, category_id, description, receipt_url, subscription_id)
@@ -85,25 +123,17 @@ exports.createTransaction = async (req, res) => {
 
     const transactionId = result.insertId;
 
-    // 2. If it's a subscription payment, bump the billing date
-    if (subscription_id) {
-      const [existingSubs] = await connection.query(
-        'SELECT * FROM subscriptions WHERE id = ? AND user_id = ?',
-        [subscription_id, req.user.id]
+    // 3. Bump the billing date if valid
+    if (subToUpdate && newNextBillingDate) {
+      await connection.query(
+        'UPDATE subscriptions SET next_billing_date = ? WHERE id = ?',
+        [newNextBillingDate, subscription_id]
       );
-
-      if (existingSubs.length > 0) {
-        const sub = existingSubs[0];
-        const newNextBillingDate = calculateNextBillingDate(sub.next_billing_date, sub.billing_cycle);
-        await connection.query(
-          'UPDATE subscriptions SET next_billing_date = ? WHERE id = ?',
-          [newNextBillingDate, subscription_id]
-        );
-      }
     }
 
     await connection.commit();
-    res.status(201).json({ id: transactionId, message: 'Transaction created successfully', receipt_url });
+    const absolute_receipt_url = receipt_url ? `${req.protocol}://${req.get('host')}${receipt_url}` : null;
+    res.status(201).json({ id: transactionId, message: 'Transaction created successfully', receipt_url: absolute_receipt_url });
   } catch (error) {
     await connection.rollback();
     console.error('Error creating transaction:', error);
@@ -128,7 +158,12 @@ exports.getTransactionById = async (req, res) => {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    res.status(200).json(rows[0]);
+    const transaction = rows[0];
+    if (transaction.receipt_url && !transaction.receipt_url.startsWith('http')) {
+      transaction.receipt_url = `${req.protocol}://${req.get('host')}${transaction.receipt_url}`;
+    }
+
+    res.status(200).json(transaction);
   } catch (error) {
     console.error('Error fetching transaction details:', error);
     res.status(500).json({ error: 'Failed to fetch transaction details' });

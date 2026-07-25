@@ -95,3 +95,46 @@ exports.deleteAccount = async (req, res) => {
     res.status(500).json({ error: 'Failed to delete account' });
   }
 };
+
+exports.getAccountTransactions = async (req, res) => {
+  const { id } = req.params;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = parseInt(req.query.offset) || 0;
+
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM account_transactions WHERE account_id = ? AND user_id = ? ORDER BY date DESC, created_at DESC LIMIT ? OFFSET ?',
+      [id, req.user.id, limit, offset]
+    );
+
+    const nextOffset = rows.length === limit ? offset + limit : null;
+
+    res.status(200).json({
+      data: rows,
+      nextOffset
+    });
+  } catch (error) {
+    console.error('Error fetching account transactions:', error);
+    res.status(500).json({ error: 'Failed to fetch account transactions' });
+  }
+};
+
+// Get a single account transaction by its local ID
+exports.getAccountTransactionById = async (req, res) => {
+  try {
+    const { txnId } = req.params;
+    const [transactions] = await pool.query(
+      'SELECT * FROM account_transactions WHERE id = ? AND user_id = ?',
+      [txnId, req.user.id]
+    );
+
+    if (transactions.length === 0) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    res.json({ data: transactions[0] });
+  } catch (error) {
+    console.error('Error fetching account transaction details:', error);
+    res.status(500).json({ error: 'Failed to fetch transaction details' });
+  }
+};
