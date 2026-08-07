@@ -14,6 +14,9 @@ const morgan = require('morgan');
 
 const app = express();
 
+// Trust the first proxy to allow express-rate-limit to read X-Forwarded-For
+app.set('trust proxy', 1);
+
 const corsOptions = {
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,

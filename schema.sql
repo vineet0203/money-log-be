@@ -170,6 +170,7 @@ CREATE TABLE `plaid_items` (
   `access_token` varchar(255) NOT NULL,
   `institution_id` varchar(255) DEFAULT NULL,
   `institution_name` varchar(255) DEFAULT NULL,
+  `plaid_raw_data` json DEFAULT NULL,
   `transaction_cursor` varchar(255) DEFAULT NULL,
   `status` enum('good', 'login_required') DEFAULT 'good',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
