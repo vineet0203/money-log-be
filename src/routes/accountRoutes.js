@@ -7,6 +7,7 @@ router.use(verifyToken);
 
 router.get('/', accountController.getAccounts);
 router.post('/', accountController.addAccount);
+router.get('/:id', accountController.getAccountById);
 router.put('/:id', accountController.updateAccount);
 router.delete('/:id', accountController.deleteAccount);
 
