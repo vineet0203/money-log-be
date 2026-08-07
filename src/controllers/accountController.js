@@ -2,23 +2,53 @@ const { pool } = require('../config/db');
 
 exports.getAccounts = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 20;
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = parseInt(req.query.limit) || 10;
+    const page  = parseInt(req.query.page)  || 1;
+    const offset = (page - 1) * limit;
+
+    const [[{ total }]] = await pool.query(
+      'SELECT COUNT(*) as total FROM accounts WHERE user_id = ?',
+      [req.user.id]
+    );
 
     const [rows] = await pool.query(
       'SELECT * FROM accounts WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
       [req.user.id, limit, offset]
     );
-    
-    const nextOffset = rows.length === limit ? offset + limit : null;
-    
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
     res.status(200).json({
       data: rows,
-      nextOffset
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalItems: total,
+        itemsPerPage: limit,
+      }
     });
   } catch (error) {
     console.error('Error fetching accounts:', error);
     res.status(500).json({ error: 'Failed to fetch accounts' });
+  }
+};
+
+exports.getAccountById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM accounts WHERE id = ? AND user_id = ?',
+      [id, req.user.id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    res.status(200).json({ data: rows[0] });
+  } catch (error) {
+    console.error('Error fetching account:', error);
+    res.status(500).json({ error: 'Failed to fetch account' });
   }
 };
 
@@ -98,20 +128,40 @@ exports.deleteAccount = async (req, res) => {
 
 exports.getAccountTransactions = async (req, res) => {
   const { id } = req.params;
-  const limit = parseInt(req.query.limit) || 20;
-  const offset = parseInt(req.query.offset) || 0;
+  const limit  = parseInt(req.query.limit) || 10;
+  const page   = parseInt(req.query.page)  || 1;
+  const offset = (page - 1) * limit;
 
   try {
+    // Verify account belongs to user
+    const [account] = await pool.query(
+      'SELECT id FROM accounts WHERE id = ? AND user_id = ?',
+      [id, req.user.id]
+    );
+    if (account.length === 0) {
+      return res.status(404).json({ error: 'Account not found or unauthorized' });
+    }
+
+    const [[{ total }]] = await pool.query(
+      'SELECT COUNT(*) as total FROM account_transactions WHERE account_id = ? AND user_id = ?',
+      [id, req.user.id]
+    );
+
     const [rows] = await pool.query(
       'SELECT * FROM account_transactions WHERE account_id = ? AND user_id = ? ORDER BY date DESC, created_at DESC LIMIT ? OFFSET ?',
       [id, req.user.id, limit, offset]
     );
 
-    const nextOffset = rows.length === limit ? offset + limit : null;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
 
     res.status(200).json({
       data: rows,
-      nextOffset
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalItems: total,
+        itemsPerPage: limit,
+      }
     });
   } catch (error) {
     console.error('Error fetching account transactions:', error);
