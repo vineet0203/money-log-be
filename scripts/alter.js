@@ -19,7 +19,7 @@ async function run() {
     console.log("Adding subtype and plaid_raw_data to accounts...");
     await pool.query(`
       ALTER TABLE accounts
-      ADD COLUMN subtype VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN subtype VARCHAR(50) DEFAULT NULL,
       ADD COLUMN plaid_raw_data JSON DEFAULT NULL
     `).catch(err => {
       if (err.code !== 'ER_DUP_FIELDNAME') throw err;

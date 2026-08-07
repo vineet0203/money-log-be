@@ -1,9 +1,11 @@
+SET FOREIGN_KEY_CHECKS = 0;
+
 DROP TABLE IF EXISTS `accounts`;
 CREATE TABLE `accounts` (
   `id` int NOT NULL AUTO_INCREMENT,
   `user_id` int NOT NULL,
   `type` enum('bank','card','wallet') NOT NULL DEFAULT 'bank',
-  `subtype` varchar(100) DEFAULT NULL,
+  `subtype` varchar(50) DEFAULT NULL,
   `name` varchar(255) NOT NULL,
   `account_number` varchar(255) DEFAULT NULL,
   `holder_name` varchar(255) DEFAULT NULL,
@@ -13,9 +15,8 @@ CREATE TABLE `accounts` (
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00,
   `available_balance` decimal(15,2) DEFAULT NULL,
   `credit_limit` decimal(15,2) DEFAULT NULL,
-  `currency` varchar(10) DEFAULT 'USD',
-  `logo` text,
-  `color` varchar(50) DEFAULT '#000000',
+  `logo` longtext,
+  `color` varchar(20) DEFAULT NULL,
   `plaid_raw_data` json DEFAULT NULL,
   `last_balance_sync` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
@@ -215,6 +216,7 @@ CREATE TABLE `account_transactions` (
   KEY `user_id` (`user_id`),
   KEY `account_id` (`account_id`),
   CONSTRAINT `account_tx_user_fk` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `account_tx_account_fk` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
+  CONSTRAINT `account_transactions_ibfk_2` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+SET FOREIGN_KEY_CHECKS = 1;
