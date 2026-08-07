@@ -3,6 +3,7 @@ CREATE TABLE `accounts` (
   `id` int NOT NULL AUTO_INCREMENT,
   `user_id` int NOT NULL,
   `type` enum('bank','card','wallet') NOT NULL DEFAULT 'bank',
+  `subtype` varchar(100) DEFAULT NULL,
   `name` varchar(255) NOT NULL,
   `account_number` varchar(255) DEFAULT NULL,
   `holder_name` varchar(255) DEFAULT NULL,

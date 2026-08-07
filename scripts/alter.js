@@ -16,13 +16,14 @@ async function run() {
       console.log("account_transactions columns already exist.");
     });
     
-    console.log("Adding plaid_raw_data to accounts...");
+    console.log("Adding subtype and plaid_raw_data to accounts...");
     await pool.query(`
       ALTER TABLE accounts
+      ADD COLUMN subtype VARCHAR(100) DEFAULT NULL,
       ADD COLUMN plaid_raw_data JSON DEFAULT NULL
     `).catch(err => {
       if (err.code !== 'ER_DUP_FIELDNAME') throw err;
-      console.log("accounts.plaid_raw_data already exists.");
+      console.log("accounts new columns already exist.");
     });
 
     console.log("Adding plaid_raw_data to plaid_items...");
