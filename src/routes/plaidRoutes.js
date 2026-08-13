@@ -24,4 +24,10 @@ router.post('/sync-balance', plaidController.syncBalance);
 // Route to sync all transactions
 router.post('/sync-transactions', plaidController.syncAllTransactions);
 
+// Route to sync liabilities
+router.post('/sync-liabilities', plaidController.syncLiabilities);
+
+// Route to get liabilities
+router.get('/liabilities', plaidController.getLiabilities);
+
 module.exports = router;

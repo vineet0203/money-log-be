@@ -219,4 +219,26 @@ CREATE TABLE `account_transactions` (
   CONSTRAINT `account_transactions_ibfk_2` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+DROP TABLE IF EXISTS `account_liabilities`;
+CREATE TABLE `account_liabilities` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `account_id` int NOT NULL,
+  `type` varchar(50) NOT NULL,
+  `apr` decimal(10,4) DEFAULT NULL,
+  `rate_type` varchar(50) DEFAULT NULL,
+  `minimum_payment` decimal(15,2) DEFAULT NULL,
+  `last_payment_amount` decimal(15,2) DEFAULT NULL,
+  `next_payment_date` date DEFAULT NULL,
+  `loan_term` varchar(50) DEFAULT NULL,
+  `expected_payoff_date` date DEFAULT NULL,
+  `origination_principal` decimal(15,2) DEFAULT NULL,
+  `ytd_interest_paid` decimal(15,2) DEFAULT NULL,
+  `raw_data` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `account_id` (`account_id`),
+  CONSTRAINT `account_liabilities_ibfk_1` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

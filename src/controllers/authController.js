@@ -141,6 +141,8 @@ exports.verifyOtp = async (req, res) => {
       return res.status(200).json({
         message: 'OTP verified successfully',
         isProfileComplete,
+        accessToken,
+        refreshToken,
         user: {
           id: userRecord.id,
           phoneNumber: userRecord.phone_number,
@@ -172,7 +174,7 @@ exports.refreshToken = async (req, res) => {
   const clientType = req.headers['x-client-type'];
   let refreshToken = req.body.refreshToken;
   
-  if (clientType === 'web' && req.cookies && req.cookies.refreshToken) {
+  if (!refreshToken && clientType === 'web' && req.cookies && req.cookies.refreshToken) {
     refreshToken = req.cookies.refreshToken;
   }
 
@@ -210,7 +212,11 @@ exports.refreshToken = async (req, res) => {
       res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
       res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
       
-      return res.status(200).json({ message: 'Token refreshed successfully' });
+      return res.status(200).json({ 
+        message: 'Token refreshed successfully',
+        accessToken,
+        refreshToken
+      });
     }
 
     res.status(200).json({

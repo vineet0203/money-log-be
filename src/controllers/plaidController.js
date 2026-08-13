@@ -29,13 +29,22 @@ const plaidClient = new PlaidApi(configuration);
 
 exports.createLinkToken = async (req, res) => {
   try {
+    const { type } = req.body || {};
+    let products = PLAID_PRODUCTS;
+
+    if (type === 'liabilities') {
+      products = ['liabilities'];
+    } else if (type === 'bank') {
+      products = ['auth', 'transactions'];
+    }
+
     const request = {
       user: {
         // req.user.id comes from verifyToken middleware
         client_user_id: req.user ? req.user.id.toString() : "guest",
       },
       client_name: "Money Log",
-      products: PLAID_PRODUCTS,
+      products: products,
       country_codes: PLAID_COUNTRY_CODES,
       language: "en",
     };
@@ -491,5 +500,145 @@ exports.syncAllTransactions = async (req, res) => {
   } catch (error) {
     console.error("Error syncing transactions:", error);
     res.status(500).json({ error: "Failed to sync transactions" });
+  }
+};
+
+exports.syncLiabilities = async (req, res) => {
+  try {
+    const [items] = await pool.query(
+      "SELECT id, access_token FROM plaid_items WHERE user_id = ? AND status = 'good'",
+      [req.user.id]
+    );
+
+    if (items.length === 0) {
+      return res.status(400).json({ error: "No connected banks found" });
+    }
+
+    let totalSynced = 0;
+
+    for (const item of items) {
+      try {
+        const liabilitiesResponse = await plaidClient.liabilitiesGet({
+          access_token: item.access_token,
+        });
+
+        const data = liabilitiesResponse.data;
+        
+        // Log for debugging
+        console.log("Plaid Liabilities Response:", JSON.stringify(data, null, 2));
+        
+        // Map plaid_account_id -> local_account_id
+        const accountMap = {};
+        const [accounts] = await pool.query(
+          "SELECT id, external_id FROM accounts WHERE user_id = ? AND provider = 'plaid'",
+          [req.user.id]
+        );
+        for (const acc of accounts) {
+          accountMap[acc.external_id] = acc.id;
+        }
+
+        const upsertLiability = async (accountId, type, details) => {
+            const localId = accountMap[accountId];
+            if (!localId) return;
+
+            let apr = null, rateType = null, minPayment = null, lastPayment = null, nextDate = null;
+            let loanTerm = null, expectedPayoff = null, origPrincipal = null, ytdInterest = null;
+
+            if (type === 'credit') {
+                apr = details?.aprs?.[0]?.apr_percentage || null;
+                rateType = details?.aprs?.[0]?.apr_type || null;
+                minPayment = details?.minimum_payment_amount ?? null;
+                lastPayment = details?.last_payment_amount ?? null;
+                nextDate = details?.next_payment_due_date || null;
+            } else if (type === 'student') {
+                apr = details?.interest_rate_percentage ?? null;
+                minPayment = details?.minimum_payment_amount ?? null;
+                lastPayment = details?.last_payment_amount ?? null;
+                nextDate = details?.next_payment_due_date || null;
+                loanTerm = 'N/A';
+                expectedPayoff = details?.expected_payoff_date || null;
+                origPrincipal = details?.origination_principal_amount ?? null;
+                ytdInterest = details?.ytd_interest_paid ?? null;
+            } else if (type === 'mortgage') {
+                apr = details?.interest_rate?.percentage ?? null;
+                rateType = details?.interest_rate?.type || null;
+                minPayment = (details?.next_monthly_payment ?? details?.next_payment_due_date) ? (details.next_monthly_payment ?? null) : null;
+                lastPayment = details?.last_payment_amount ?? null;
+                nextDate = details?.next_payment_due_date || null;
+                loanTerm = details?.loan_term || null;
+                expectedPayoff = details?.maturity_date || null;
+                origPrincipal = details?.origination_principal_amount ?? null;
+                ytdInterest = details?.ytd_interest_paid ?? null;
+            }
+
+            await pool.query(
+                `INSERT INTO account_liabilities (
+                  account_id, type, apr, rate_type, minimum_payment, last_payment_amount, next_payment_date,
+                  loan_term, expected_payoff_date, origination_principal, ytd_interest_paid, raw_data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  apr = VALUES(apr), rate_type = VALUES(rate_type), minimum_payment = VALUES(minimum_payment),
+                  last_payment_amount = VALUES(last_payment_amount), next_payment_date = VALUES(next_payment_date),
+                  loan_term = VALUES(loan_term), expected_payoff_date = VALUES(expected_payoff_date),
+                  origination_principal = VALUES(origination_principal), ytd_interest_paid = VALUES(ytd_interest_paid),
+                  raw_data = VALUES(raw_data)`,
+                [
+                  localId, type, apr, rateType, minPayment, lastPayment, nextDate,
+                  loanTerm, expectedPayoff, origPrincipal, ytdInterest, JSON.stringify(details || {})
+                ]
+            );
+            totalSynced++;
+        };
+
+        // Create a lookup for detailed liability info
+        const detailedLiabilities = {};
+        if (data.liabilities.credit) data.liabilities.credit.forEach(c => detailedLiabilities[c.account_id] = c);
+        if (data.liabilities.student) data.liabilities.student.forEach(s => detailedLiabilities[s.account_id] = s);
+        if (data.liabilities.mortgage) data.liabilities.mortgage.forEach(m => detailedLiabilities[m.account_id] = m);
+
+        // Iterate through all accounts and check if they are liabilities
+        if (data.accounts) {
+            for (const account of data.accounts) {
+                if (account.type === 'credit' || account.type === 'loan') {
+                    const details = detailedLiabilities[account.account_id] || {};
+                    let type = 'credit';
+                    if (account.subtype === 'student') type = 'student';
+                    else if (account.subtype === 'mortgage') type = 'mortgage';
+                    else if (account.type === 'loan') type = 'loan';
+                    
+                    await upsertLiability(account.account_id, type, details);
+                }
+            }
+        }
+
+      } catch (err) {
+        console.error(`Error syncing liabilities for item:`, err.response?.data || err.message);
+      }
+    }
+
+    res.json({ message: "Liabilities synced successfully", totalSynced });
+  } catch (error) {
+    console.error("Error in syncLiabilities:", error);
+    res.status(500).json({ error: "Failed to sync liabilities" });
+  }
+};
+
+exports.getLiabilities = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        l.id as liability_id, l.type as liability_type, l.apr, l.rate_type, l.minimum_payment, 
+        l.last_payment_amount, l.next_payment_date, l.loan_term, l.expected_payoff_date, 
+        l.origination_principal, l.ytd_interest_paid,
+        a.id as account_id, a.name, a.subtype, a.balance, a.credit_limit, a.provider, a.color, a.logo
+      FROM account_liabilities l
+      JOIN accounts a ON l.account_id = a.id
+      WHERE a.user_id = ?
+    `;
+    const [liabilities] = await pool.query(query, [req.user.id]);
+    res.json({ data: liabilities });
+  } catch (error) {
+    console.error("Error fetching liabilities:", error);
+    res.status(500).json({ error: "Failed to fetch liabilities" });
   }
 };
