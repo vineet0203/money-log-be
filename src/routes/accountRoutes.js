@@ -9,6 +9,7 @@ router.get('/', accountController.getAccounts);
 router.post('/', accountController.addAccount);
 router.get('/:id', accountController.getAccountById);
 router.put('/:id', accountController.updateAccount);
+router.post('/bulk-delete', accountController.bulkDeleteAccounts);
 router.delete('/:id', accountController.deleteAccount);
 
 // Get specific account transaction details by local ID

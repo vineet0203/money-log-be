@@ -241,4 +241,19 @@ CREATE TABLE `account_liabilities` (
   CONSTRAINT `account_liabilities_ibfk_1` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+DROP TABLE IF EXISTS `liability_aprs`;
+CREATE TABLE `liability_aprs` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `account_liability_id` int NOT NULL,
+  `apr_type` varchar(50) NOT NULL,
+  `apr_percentage` decimal(6,3) DEFAULT NULL,
+  `balance_subject_to_apr` decimal(15,2) DEFAULT NULL,
+  `interest_charge_amount` decimal(15,2) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_liability_apr_type` (`account_liability_id`, `apr_type`),
+  CONSTRAINT `liability_aprs_ibfk_1` FOREIGN KEY (`account_liability_id`) REFERENCES `account_liabilities` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

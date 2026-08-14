@@ -28,6 +28,11 @@ router.post('/sync-transactions', plaidController.syncAllTransactions);
 router.post('/sync-liabilities', plaidController.syncLiabilities);
 
 // Route to get liabilities
-router.get('/liabilities', plaidController.getLiabilities);
+router.get('/liabilities/:account_id', plaidController.getLiabilityByAccountId);
+
+// Asset Report Routes
+router.post('/sync-assets', plaidController.syncAssets);
+router.get('/asset-reports', plaidController.getAssetReportsList);
+router.get('/asset-reports/:asset_report_id', plaidController.getAssetReport);
 
 module.exports = router;

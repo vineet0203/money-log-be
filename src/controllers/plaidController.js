@@ -29,41 +29,23 @@ const plaidClient = new PlaidApi(configuration);
 
 exports.createLinkToken = async (req, res) => {
   try {
-    const { type } = req.body || {};
-    let products = PLAID_PRODUCTS;
-
-    if (type === 'liabilities') {
-      products = ['liabilities'];
-    } else if (type === 'bank') {
-      products = ['auth', 'transactions'];
-    }
-
     const request = {
       user: {
-        // req.user.id comes from verifyToken middleware
         client_user_id: req.user ? req.user.id.toString() : "guest",
       },
       client_name: "Money Log",
-      products: products,
+      products: ["transactions", "assets"],
+      optional_products: ["auth", "liabilities"],
       country_codes: PLAID_COUNTRY_CODES,
       language: "en",
+      webhook: process.env.PLAID_WEBHOOK_URL,
     };
-
-    // Optional: Only include webhook if you configure one later
-    // if (process.env.PLAID_WEBHOOK_URL) {
-    //   request.webhook = process.env.PLAID_WEBHOOK_URL;
-    // }
 
     const response = await plaidClient.linkTokenCreate(request);
     res.json(response.data);
   } catch (error) {
-    console.error(
-      "Error creating link token:",
-      error.response?.data || error.message,
-    );
-    res
-      .status(500)
-      .json({ error: error.response?.data?.error_message || error.message });
+    console.error("Error creating link token:", error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data?.error_message || error.message });
   }
 };
 
@@ -587,6 +569,30 @@ exports.syncLiabilities = async (req, res) => {
                   loanTerm, expectedPayoff, origPrincipal, ytdInterest, JSON.stringify(details || {})
                 ]
             );
+
+            const [liabilityRows] = await pool.query('SELECT id FROM account_liabilities WHERE account_id = ?', [localId]);
+            const liabilityId = liabilityRows[0]?.id;
+
+            if (liabilityId && type === 'credit' && details?.aprs && Array.isArray(details.aprs)) {
+                for (const aprItem of details.aprs) {
+                    await pool.query(
+                      `INSERT INTO liability_aprs (
+                        account_liability_id, apr_type, apr_percentage, balance_subject_to_apr, interest_charge_amount
+                      ) VALUES (?, ?, ?, ?, ?)
+                      ON DUPLICATE KEY UPDATE
+                        apr_percentage = VALUES(apr_percentage),
+                        balance_subject_to_apr = VALUES(balance_subject_to_apr),
+                        interest_charge_amount = VALUES(interest_charge_amount)`,
+                      [
+                        liabilityId,
+                        aprItem.apr_type,
+                        aprItem.apr_percentage,
+                        aprItem.balance_subject_to_apr,
+                        aprItem.interest_charge_amount
+                      ]
+                    );
+                }
+            }
             totalSynced++;
         };
 
@@ -623,22 +629,146 @@ exports.syncLiabilities = async (req, res) => {
   }
 };
 
-exports.getLiabilities = async (req, res) => {
+
+exports.getLiabilityByAccountId = async (req, res) => {
   try {
+    const { account_id } = req.params;
     const query = `
       SELECT 
         l.id as liability_id, l.type as liability_type, l.apr, l.rate_type, l.minimum_payment, 
         l.last_payment_amount, l.next_payment_date, l.loan_term, l.expected_payoff_date, 
         l.origination_principal, l.ytd_interest_paid,
-        a.id as account_id, a.name, a.subtype, a.balance, a.credit_limit, a.provider, a.color, a.logo
+        a.id as account_id, a.name, a.subtype, a.balance, a.credit_limit, a.provider, a.color, a.logo,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'apr_type', apr_type,
+              'apr_percentage', apr_percentage,
+              'balance_subject_to_apr', balance_subject_to_apr,
+              'interest_charge_amount', interest_charge_amount
+            )
+          )
+          FROM liability_aprs
+          WHERE account_liability_id = l.id
+        ) as aprs
       FROM account_liabilities l
       JOIN accounts a ON l.account_id = a.id
-      WHERE a.user_id = ?
+      WHERE a.user_id = ? AND a.id = ?
     `;
-    const [liabilities] = await pool.query(query, [req.user.id]);
-    res.json({ data: liabilities });
+    const [liabilities] = await pool.query(query, [req.user.id, account_id]);
+    
+    if (liabilities.length === 0) {
+      return res.status(404).json({ error: "No liability found for this account" });
+    }
+    
+    res.json({ data: liabilities[0] });
   } catch (error) {
-    console.error("Error fetching liabilities:", error);
-    res.status(500).json({ error: "Failed to fetch liabilities" });
+    console.error("Error fetching liability details:", error);
+    res.status(500).json({ error: "Failed to fetch liability details" });
+  }
+};
+
+exports.syncAssets = async (req, res) => {
+  try {
+    const requestedDays = parseInt(req.body.days_requested) || 90;
+    // Validate to only allow 30, 60, 90, 120, 150
+    const validDays = [30, 60, 90, 120, 150];
+    const days = validDays.includes(requestedDays) ? requestedDays : 90;
+
+    const [items] = await pool.query(
+      "SELECT access_token FROM plaid_items WHERE user_id = ? AND status = 'good'",
+      [req.user.id]
+    );
+
+    if (items.length === 0) {
+      return res.status(400).json({ message: "No linked accounts found to generate assets." });
+    }
+
+    const accessTokens = items.map(item => item.access_token);
+
+    const createResponse = await plaidClient.assetReportCreate({
+      access_tokens: accessTokens,
+      days_requested: days,
+      options: {
+        client_report_id: `user_${req.user.id}_${Date.now()}`,
+        webhook: process.env.PLAID_WEBHOOK_URL,
+      },
+    });
+
+    const { asset_report_id, asset_report_token } = createResponse.data;
+
+    // Persist so the report can be retrieved later, even after this response is gone
+    await pool.query(
+      `INSERT INTO asset_reports (user_id, asset_report_id, asset_report_token, status, days_requested, created_at)
+       VALUES (?, ?, ?, 'pending', ?, NOW())`,
+      [req.user.id, asset_report_id, asset_report_token, days]
+    );
+
+    res.status(202).json({
+      message: "Asset report generation started.",
+      asset_report_id,
+    });
+  } catch (error) {
+    const errorCode = error.response?.data?.error_code;
+
+    if (errorCode === 'ADDITIONAL_CONSENT_REQUIRED' || errorCode === 'PRODUCT_NOT_ENABLED') {
+      return res.status(409).json({
+        error: "One or more linked accounts need Assets permission. Please re-authorize.",
+        code: 'NEEDS_ASSETS_CONSENT',
+      });
+    }
+
+    console.error("Error syncing assets:", error.response?.data || error.message);
+    res.status(500).json({ error: "Failed to generate asset report" });
+  }
+};
+
+exports.getAssetReport = async (req, res) => {
+  try {
+    const { asset_report_id } = req.params;
+
+    const [reports] = await pool.query(
+      "SELECT * FROM asset_reports WHERE asset_report_id = ? AND user_id = ?",
+      [asset_report_id, req.user.id]
+    );
+    if (reports.length === 0) {
+      return res.status(404).json({ error: "Report not found" });
+    }
+
+    const report = reports[0];
+
+    const response = await plaidClient.assetReportGet({
+      asset_report_token: report.asset_report_token,
+      include_insights: true,
+    });
+
+    await pool.query(
+      "UPDATE asset_reports SET status = 'ready', ready_at = NOW() WHERE id = ?",
+      [report.id]
+    );
+
+    return res.json({ status: "ready", report: response.data.report });
+  } catch (error) {
+    const errorCode = error.response?.data?.error_code;
+
+    if (errorCode === "PRODUCT_NOT_READY") {
+      return res.status(202).json({ status: "pending", message: "Report is still generating." });
+    }
+
+    console.error("Error fetching asset report:", error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data?.error_message || error.message });
+  }
+};
+
+exports.getAssetReportsList = async (req, res) => {
+  try {
+    const [reports] = await pool.query(
+      "SELECT id, asset_report_id, status, days_requested, created_at, ready_at FROM asset_reports WHERE user_id = ? ORDER BY created_at DESC",
+      [req.user.id]
+    );
+    res.json({ data: reports });
+  } catch (error) {
+    console.error("Error fetching asset reports list:", error);
+    res.status(500).json({ error: "Failed to fetch asset reports" });
   }
 };

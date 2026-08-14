@@ -126,6 +126,31 @@ exports.deleteAccount = async (req, res) => {
   }
 };
 
+exports.bulkDeleteAccounts = async (req, res) => {
+  const { ids } = req.body;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'Valid account IDs array is required' });
+  }
+
+  try {
+    // Delete multiple accounts that belong to the user
+    const placeholders = ids.map(() => '?').join(',');
+    const [result] = await pool.query(
+      `DELETE FROM accounts WHERE user_id = ? AND id IN (${placeholders})`,
+      [req.user.id, ...ids]
+    );
+
+    res.status(200).json({ 
+      message: 'Accounts deleted successfully',
+      deletedCount: result.affectedRows 
+    });
+  } catch (error) {
+    console.error('Error bulk deleting accounts:', error);
+    res.status(500).json({ error: 'Failed to bulk delete accounts' });
+  }
+};
+
 exports.getAccountTransactions = async (req, res) => {
   const { id } = req.params;
   const limit  = parseInt(req.query.limit) || 10;
