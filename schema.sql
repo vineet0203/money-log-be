@@ -256,4 +256,19 @@ CREATE TABLE `liability_aprs` (
   CONSTRAINT `liability_aprs_ibfk_1` FOREIGN KEY (`account_liability_id`) REFERENCES `account_liabilities` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+DROP TABLE IF EXISTS `asset_reports`;
+CREATE TABLE `asset_reports` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `asset_report_id` varchar(64) NOT NULL,
+  `asset_report_token` varchar(128) NOT NULL,
+  `status` enum('pending','ready','error') DEFAULT 'pending',
+  `days_requested` int DEFAULT '90',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `ready_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `user_id` (`user_id`),
+  CONSTRAINT `asset_reports_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
