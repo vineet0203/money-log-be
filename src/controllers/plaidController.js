@@ -7,9 +7,6 @@ const {
 require("dotenv").config();
 const { pool } = require("../config/db");
 
-const PLAID_PRODUCTS = (
-  process.env.PLAID_PRODUCTS || Products.Transactions
-).split(",");
 
 const PLAID_COUNTRY_CODES = (process.env.PLAID_COUNTRY_CODES || "US,CA").split(
   ",",

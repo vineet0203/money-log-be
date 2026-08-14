@@ -10,6 +10,7 @@ const reportsRoutes = require('./routes/reportRoutes');
 const usersRoutes = require('./routes/userRoutes');
 const notificationsRoutes = require('./routes/notificationRoutes');
 const plaidRoutes = require('./routes/plaidRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 const morgan = require('morgan');
 
 const app = express();
@@ -36,6 +37,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/plaid', plaidRoutes);
+app.use('/api/webhook', webhookRoutes);
 
 // Serve uploads statically
 app.use('/uploads', express.static('uploads'));
