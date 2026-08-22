@@ -6,6 +6,7 @@ const {
 } = require("plaid");
 require("dotenv").config();
 const { pool } = require("../config/db");
+const { syncTransactionsForItem, syncLiabilitiesForItem } = require("../services/plaidServices");
 
 
 const PLAID_COUNTRY_CODES = (process.env.PLAID_COUNTRY_CODES || "US,CA").split(
@@ -108,6 +109,21 @@ exports.exchangePublicToken = async (req, res) => {
     // Step 5: Save each account into the accounts table
     const savedAccounts = [];
     for (const account of plaidAccounts) {
+      // Check if this specific account is already linked (null-safe mask check)
+      const [existing] = await pool.query(
+        `SELECT * FROM accounts 
+         WHERE user_id = ? AND provider = 'plaid' 
+         AND institution_id = ?
+         AND name = ? AND account_number <=> ?`,
+        [req.user.id, institutionId, account.name, account.mask || null]
+      );
+
+      if (existing.length > 0) {
+        console.log(`Skipping duplicate account insertion: ${account.name} (Mask: ${account.mask || 'N/A'})`);
+        savedAccounts.push(existing[0]);
+        continue; 
+      }
+
       // Map Plaid account type to our type enum
       let accountType = "bank";
       if (account.type === "credit" || account.type === "loan") {
@@ -121,8 +137,8 @@ exports.exchangePublicToken = async (req, res) => {
         account.balances.limit !== null ? account.balances.limit : null;
 
       const [result] = await pool.query(
-        `INSERT INTO accounts (user_id, type, subtype, name, account_number, balance, available_balance, credit_limit, holder_name, provider, external_id, logo, color, plaid_raw_data, last_balance_sync) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'plaid', ?, ?, ?, ?, NOW())`,
+        `INSERT INTO accounts (user_id, type, subtype, name, account_number, balance, available_balance, credit_limit, holder_name, provider, institution_id, item_id, external_id, logo, color, plaid_raw_data, last_balance_sync) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'plaid', ?, ?, ?, ?, ?, ?, NOW())`,
         [
           req.user.id,
           accountType,
@@ -133,6 +149,8 @@ exports.exchangePublicToken = async (req, res) => {
           availableBalance,
           creditLimit,
           account.official_name || account.name,
+          institutionId,
+          itemId,
           account.account_id,
           institutionLogo,
           institutionColor,
@@ -145,6 +163,20 @@ exports.exchangePublicToken = async (req, res) => {
         [result.insertId],
       );
       savedAccounts.push(newAccount[0]);
+    }
+
+    // Eagerly activate the item for webhooks by running one initial sync
+    // This may return zero transactions on the very first call — that's expected.
+    try {
+      const [newItemRows] = await pool.query(
+        "SELECT id, access_token, transaction_cursor, user_id FROM plaid_items WHERE item_id = ?",
+        [itemId]
+      );
+      if (newItemRows.length > 0) {
+        await syncTransactionsForItem(newItemRows[0]);
+      }
+    } catch (syncErr) {
+      console.warn("Initial transaction sync failed (will catch up via webhook):", syncErr.message);
     }
 
     // IMPORTANT: Never send the access_token back to the client!
@@ -350,131 +382,25 @@ exports.syncBalance = async (req, res) => {
   }
 };
 
-// Sync all transactions for all linked banks
+// Sync all transactions for all linked banks (manual fallback)
 exports.syncAllTransactions = async (req, res) => {
   try {
-    // Configurable loop limit. Set to null to process all available historical chunks.
-    const MAX_LOOPS = null;
-
-    // 1. Get all Plaid Items for the user
     const [items] = await pool.query(
-      "SELECT id, access_token, transaction_cursor FROM plaid_items WHERE user_id = ?",
-      [req.user.id],
+      "SELECT id, access_token, transaction_cursor, user_id FROM plaid_items WHERE user_id = ?",
+      [req.user.id]
     );
 
-    // 2. Get a mapping of Plaid account_id -> Local DB account.id
-    const [accounts] = await pool.query(
-      'SELECT id, external_id FROM accounts WHERE user_id = ? AND provider = "plaid"',
-      [req.user.id],
-    );
-    const accountMap = {};
-    accounts.forEach((acc) => {
-      if (acc.external_id) {
-        accountMap[acc.external_id] = acc.id;
-      }
-    });
-
-    let totalAdded = 0;
-    let totalModified = 0;
-    let totalRemoved = 0;
-
-    // 3. Process each Plaid Item
+    let totalAdded = 0, totalModified = 0, totalRemoved = 0;
     for (const item of items) {
-      let hasMore = true;
-      let cursor = item.transaction_cursor;
-      let loopCount = 0;
-
-      while (hasMore && (MAX_LOOPS === null || loopCount < MAX_LOOPS)) {
-        try {
-          const syncResponse = await plaidClient.transactionsSync({
-            access_token: item.access_token,
-            cursor: cursor || undefined,
-          });
-
-          const data = syncResponse.data;
-
-          // Handle Added and Modified Transactions
-          const upsertTransactions = [...data.added, ...data.modified];
-          for (const txn of upsertTransactions) {
-            const localAccountId = accountMap[txn.account_id];
-            if (!localAccountId) continue;
-
-            await pool.query(
-              `INSERT INTO account_transactions (
-                user_id, account_id, provider_transaction_id, amount, date, name, merchant_name, 
-                logo_url, currency, payment_channel, primary_category, detailed_category, pending,
-                datetime, authorized_date, authorized_datetime, location, payment_meta
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
-              ON DUPLICATE KEY UPDATE 
-                amount = VALUES(amount), date = VALUES(date), name = VALUES(name), merchant_name = VALUES(merchant_name),
-                logo_url = VALUES(logo_url), currency = VALUES(currency), payment_channel = VALUES(payment_channel),
-                primary_category = VALUES(primary_category), detailed_category = VALUES(detailed_category), pending = VALUES(pending),
-                datetime = VALUES(datetime), authorized_date = VALUES(authorized_date), authorized_datetime = VALUES(authorized_datetime),
-                location = VALUES(location), payment_meta = VALUES(payment_meta)`,
-              [
-                req.user.id,
-                localAccountId,
-                txn.transaction_id,
-                txn.amount,
-                txn.date,
-                txn.name,
-                txn.merchant_name || null,
-                txn.logo_url || null,
-                txn.iso_currency_code || "USD",
-                txn.payment_channel || null,
-                txn.personal_finance_category?.primary || null,
-                txn.personal_finance_category?.detailed || null,
-                txn.pending ? 1 : 0,
-                txn.datetime || null,
-                txn.authorized_date || null,
-                txn.authorized_datetime || null,
-                txn.location ? JSON.stringify(txn.location) : null,
-                txn.payment_meta ? JSON.stringify(txn.payment_meta) : null,
-              ],
-            );
-          }
-
-          totalAdded += data.added.length;
-          totalModified += data.modified.length;
-
-          // Handle Removed Transactions
-          for (const txn of data.removed) {
-            await pool.query(
-              "DELETE FROM account_transactions WHERE provider_transaction_id = ? AND user_id = ?",
-              [txn.transaction_id, req.user.id],
-            );
-          }
-          totalRemoved += data.removed.length;
-
-          // Update cursor and has_more
-          cursor = data.next_cursor;
-          hasMore = data.has_more;
-          loopCount++;
-        } catch (syncError) {
-          console.error(
-            `Error syncing transactions for item ${item.id}:`,
-            syncError.response?.data || syncError.message,
-          );
-          break; // Break the loop for this item and move to the next item
-        }
-      }
-
-      // Save the final cursor to the database
-      if (cursor !== item.transaction_cursor) {
-        await pool.query(
-          "UPDATE plaid_items SET transaction_cursor = ? WHERE id = ?",
-          [cursor, item.id],
-        );
-      }
+      const stats = await syncTransactionsForItem(item);
+      totalAdded += stats.added;
+      totalModified += stats.modified;
+      totalRemoved += stats.removed;
     }
 
     res.json({
       message: "Transactions synced successfully",
-      stats: {
-        added: totalAdded,
-        modified: totalModified,
-        removed: totalRemoved,
-      },
+      stats: { added: totalAdded, modified: totalModified, removed: totalRemoved },
     });
   } catch (error) {
     console.error("Error syncing transactions:", error);
@@ -482,10 +408,11 @@ exports.syncAllTransactions = async (req, res) => {
   }
 };
 
+// Sync liabilities for all linked banks (manual fallback)
 exports.syncLiabilities = async (req, res) => {
   try {
     const [items] = await pool.query(
-      "SELECT id, access_token FROM plaid_items WHERE user_id = ? AND status = 'good'",
+      "SELECT id, access_token, user_id FROM plaid_items WHERE user_id = ? AND status = 'good'",
       [req.user.id]
     );
 
@@ -494,128 +421,11 @@ exports.syncLiabilities = async (req, res) => {
     }
 
     let totalSynced = 0;
-
     for (const item of items) {
       try {
-        const liabilitiesResponse = await plaidClient.liabilitiesGet({
-          access_token: item.access_token,
-        });
-
-        const data = liabilitiesResponse.data;
-        
-        // Log for debugging
-        console.log("Plaid Liabilities Response:", JSON.stringify(data, null, 2));
-        
-        // Map plaid_account_id -> local_account_id
-        const accountMap = {};
-        const [accounts] = await pool.query(
-          "SELECT id, external_id FROM accounts WHERE user_id = ? AND provider = 'plaid'",
-          [req.user.id]
-        );
-        for (const acc of accounts) {
-          accountMap[acc.external_id] = acc.id;
-        }
-
-        const upsertLiability = async (accountId, type, details) => {
-            const localId = accountMap[accountId];
-            if (!localId) return;
-
-            let apr = null, rateType = null, minPayment = null, lastPayment = null, nextDate = null;
-            let loanTerm = null, expectedPayoff = null, origPrincipal = null, ytdInterest = null;
-
-            if (type === 'credit') {
-                apr = details?.aprs?.[0]?.apr_percentage || null;
-                rateType = details?.aprs?.[0]?.apr_type || null;
-                minPayment = details?.minimum_payment_amount ?? null;
-                lastPayment = details?.last_payment_amount ?? null;
-                nextDate = details?.next_payment_due_date || null;
-            } else if (type === 'student') {
-                apr = details?.interest_rate_percentage ?? null;
-                minPayment = details?.minimum_payment_amount ?? null;
-                lastPayment = details?.last_payment_amount ?? null;
-                nextDate = details?.next_payment_due_date || null;
-                loanTerm = 'N/A';
-                expectedPayoff = details?.expected_payoff_date || null;
-                origPrincipal = details?.origination_principal_amount ?? null;
-                ytdInterest = details?.ytd_interest_paid ?? null;
-            } else if (type === 'mortgage') {
-                apr = details?.interest_rate?.percentage ?? null;
-                rateType = details?.interest_rate?.type || null;
-                minPayment = (details?.next_monthly_payment ?? details?.next_payment_due_date) ? (details.next_monthly_payment ?? null) : null;
-                lastPayment = details?.last_payment_amount ?? null;
-                nextDate = details?.next_payment_due_date || null;
-                loanTerm = details?.loan_term || null;
-                expectedPayoff = details?.maturity_date || null;
-                origPrincipal = details?.origination_principal_amount ?? null;
-                ytdInterest = details?.ytd_interest_paid ?? null;
-            }
-
-            await pool.query(
-                `INSERT INTO account_liabilities (
-                  account_id, type, apr, rate_type, minimum_payment, last_payment_amount, next_payment_date,
-                  loan_term, expected_payoff_date, origination_principal, ytd_interest_paid, raw_data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  apr = VALUES(apr), rate_type = VALUES(rate_type), minimum_payment = VALUES(minimum_payment),
-                  last_payment_amount = VALUES(last_payment_amount), next_payment_date = VALUES(next_payment_date),
-                  loan_term = VALUES(loan_term), expected_payoff_date = VALUES(expected_payoff_date),
-                  origination_principal = VALUES(origination_principal), ytd_interest_paid = VALUES(ytd_interest_paid),
-                  raw_data = VALUES(raw_data)`,
-                [
-                  localId, type, apr, rateType, minPayment, lastPayment, nextDate,
-                  loanTerm, expectedPayoff, origPrincipal, ytdInterest, JSON.stringify(details || {})
-                ]
-            );
-
-            const [liabilityRows] = await pool.query('SELECT id FROM account_liabilities WHERE account_id = ?', [localId]);
-            const liabilityId = liabilityRows[0]?.id;
-
-            if (liabilityId && type === 'credit' && details?.aprs && Array.isArray(details.aprs)) {
-                for (const aprItem of details.aprs) {
-                    await pool.query(
-                      `INSERT INTO liability_aprs (
-                        account_liability_id, apr_type, apr_percentage, balance_subject_to_apr, interest_charge_amount
-                      ) VALUES (?, ?, ?, ?, ?)
-                      ON DUPLICATE KEY UPDATE
-                        apr_percentage = VALUES(apr_percentage),
-                        balance_subject_to_apr = VALUES(balance_subject_to_apr),
-                        interest_charge_amount = VALUES(interest_charge_amount)`,
-                      [
-                        liabilityId,
-                        aprItem.apr_type,
-                        aprItem.apr_percentage,
-                        aprItem.balance_subject_to_apr,
-                        aprItem.interest_charge_amount
-                      ]
-                    );
-                }
-            }
-            totalSynced++;
-        };
-
-        // Create a lookup for detailed liability info
-        const detailedLiabilities = {};
-        if (data.liabilities.credit) data.liabilities.credit.forEach(c => detailedLiabilities[c.account_id] = c);
-        if (data.liabilities.student) data.liabilities.student.forEach(s => detailedLiabilities[s.account_id] = s);
-        if (data.liabilities.mortgage) data.liabilities.mortgage.forEach(m => detailedLiabilities[m.account_id] = m);
-
-        // Iterate through all accounts and check if they are liabilities
-        if (data.accounts) {
-            for (const account of data.accounts) {
-                if (account.type === 'credit' || account.type === 'loan') {
-                    const details = detailedLiabilities[account.account_id] || {};
-                    let type = 'credit';
-                    if (account.subtype === 'student') type = 'student';
-                    else if (account.subtype === 'mortgage') type = 'mortgage';
-                    else if (account.type === 'loan') type = 'loan';
-                    
-                    await upsertLiability(account.account_id, type, details);
-                }
-            }
-        }
-
+        totalSynced += await syncLiabilitiesForItem(item);
       } catch (err) {
-        console.error(`Error syncing liabilities for item:`, err.response?.data || err.message);
+        console.error("Error syncing liabilities for item:", err.response?.data || err.message);
       }
     }
 

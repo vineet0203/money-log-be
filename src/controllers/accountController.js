@@ -119,6 +119,18 @@ exports.deleteAccount = async (req, res) => {
       return res.status(404).json({ error: 'Account not found or unauthorized' });
     }
 
+    // Clean up orphaned Plaid items if all accounts for an institution are deleted
+    await pool.query(`
+      DELETE p FROM plaid_items p
+      WHERE p.user_id = ? 
+      AND NOT EXISTS (
+        SELECT 1 FROM accounts a 
+        WHERE a.user_id = p.user_id 
+        AND a.provider = 'plaid' 
+        AND a.item_id = p.item_id
+      )
+    `, [req.user.id]);
+
     res.status(200).json({ message: 'Account deleted successfully' });
   } catch (error) {
     console.error('Error deleting account:', error);
@@ -140,6 +152,18 @@ exports.bulkDeleteAccounts = async (req, res) => {
       `DELETE FROM accounts WHERE user_id = ? AND id IN (${placeholders})`,
       [req.user.id, ...ids]
     );
+
+    // Clean up orphaned Plaid items if all accounts for an institution are deleted
+    await pool.query(`
+      DELETE p FROM plaid_items p
+      WHERE p.user_id = ? 
+      AND NOT EXISTS (
+        SELECT 1 FROM accounts a 
+        WHERE a.user_id = p.user_id 
+        AND a.provider = 'plaid' 
+        AND a.item_id = p.item_id
+      )
+    `, [req.user.id]);
 
     res.status(200).json({ 
       message: 'Accounts deleted successfully',

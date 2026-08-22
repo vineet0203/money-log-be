@@ -11,6 +11,8 @@ CREATE TABLE `accounts` (
   `holder_name` varchar(255) DEFAULT NULL,
   `expiry_date` varchar(10) DEFAULT NULL,
   `provider` varchar(100) DEFAULT NULL,
+  `institution_id` varchar(255) DEFAULT NULL,
+  `item_id` varchar(255) DEFAULT NULL,
   `external_id` varchar(255) DEFAULT NULL,
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00,
   `available_balance` decimal(15,2) DEFAULT NULL,
@@ -272,3 +274,11 @@ CREATE TABLE `asset_reports` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- ==========================================
+-- PRODUCTION MIGRATION COMMANDS
+-- Run these if you are updating an existing
+-- production database instead of recreating it.
+-- ==========================================
+-- ALTER TABLE accounts ADD COLUMN institution_id varchar(255) DEFAULT NULL AFTER provider;
+-- ALTER TABLE accounts ADD COLUMN item_id varchar(255) DEFAULT NULL AFTER institution_id;
