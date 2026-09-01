@@ -8,6 +8,7 @@ router.use(verifyToken);
 
 // Route to create a link token (called when launching Plaid Link)
 router.post('/create-link-token', plaidController.createLinkToken);
+router.post('/reset-item-status', plaidController.resetItemStatus);
 
 // Route to exchange the public token (called after successful Plaid Link)
 router.post('/exchange-public-token', plaidController.exchangePublicToken);

@@ -56,7 +56,7 @@ exports.handlePlaidWebhook = async (req, res) => {
       }
 
       case 'ITEM': {
-        if (webhook_code === 'ERROR') {
+        if (webhook_code === 'ERROR' && payload.error && payload.error.error_code === 'ITEM_LOGIN_REQUIRED') {
           await pool.query(
             "UPDATE plaid_items SET status = 'login_required' WHERE item_id = ?",
             [item_id]

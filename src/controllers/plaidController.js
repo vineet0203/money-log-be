@@ -27,17 +27,33 @@ const plaidClient = new PlaidApi(configuration);
 
 exports.createLinkToken = async (req, res) => {
   try {
+    const { item_id } = req.body || {};
+
     const request = {
       user: {
         client_user_id: req.user ? req.user.id.toString() : "guest",
       },
       client_name: "Money Log",
-      products: ["transactions", "assets"],
-      optional_products: ["auth", "liabilities"],
       country_codes: PLAID_COUNTRY_CODES,
       language: "en",
       webhook: process.env.PLAID_WEBHOOK_URL,
     };
+
+    if (item_id) {
+      // Update mode
+      const [rows] = await pool.query(
+        "SELECT access_token FROM plaid_items WHERE item_id = ? AND user_id = ?",
+        [item_id, req.user.id]
+      );
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+      request.access_token = rows[0].access_token;
+    } else {
+      // Standard mode
+      request.products = ["transactions", "assets"];
+      request.optional_products = ["auth", "liabilities"];
+    }
 
     const response = await plaidClient.linkTokenCreate(request);
     res.json(response.data);
@@ -465,7 +481,7 @@ exports.getLiabilityByAccountId = async (req, res) => {
     const [liabilities] = await pool.query(query, [req.user.id, account_id]);
     
     if (liabilities.length === 0) {
-      return res.status(404).json({ error: "No liability found for this account" });
+      return res.json({ data: null });
     }
     
     res.json({ data: liabilities[0] });
@@ -577,5 +593,29 @@ exports.getAssetReportsList = async (req, res) => {
   } catch (error) {
     console.error("Error fetching asset reports list:", error);
     res.status(500).json({ error: "Failed to fetch asset reports" });
+  }
+};
+
+// Reset item status after successful update mode
+exports.resetItemStatus = async (req, res) => {
+  try {
+    const { item_id } = req.body;
+    if (!item_id) {
+      return res.status(400).json({ error: "item_id is required" });
+    }
+
+    const [result] = await pool.query(
+      "UPDATE plaid_items SET status = 'good' WHERE item_id = ? AND user_id = ?",
+      [item_id, req.user.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    res.json({ message: "Item status reset successfully" });
+  } catch (error) {
+    console.error("Error resetting item status:", error);
+    res.status(500).json({ error: "Failed to reset item status" });
   }
 };

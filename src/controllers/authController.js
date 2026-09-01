@@ -17,26 +17,18 @@ exports.sendOtp = async (req, res) => {
   phone = phone.replace(/[^+\d]/g, ''); // Ensure no spaces or dashes
   
   try {
-    // If credentials are mock/placeholder, simulate success
-    if (process.env.TWILIO_ACCOUNT_SID === 'your_twilio_account_sid') {
-      console.log(`[MOCK TWILIO] Sending OTP to ${phone}`);
-      return res.status(200).json({ message: 'OTP sent successfully (mocked)' });
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[BYPASS TWILIO] Simulated OTP sent to ${phone}`);
+      return res.status(200).json({ message: 'OTP sent successfully (Bypassed Twilio)' });
     }
 
-    await twilioClient.verify.v2.services(TWILIO_SERVICE_SID)
+    const verification = await twilioClient.verify.v2.services(TWILIO_SERVICE_SID)
       .verifications
       .create({ to: phone, channel: 'sms' });
 
-    res.status(200).json({ message: 'OTP sent successfully' });
+    res.status(200).json({ message: 'OTP sent successfully', status: verification.status });
   } catch (error) {
     console.error('Error sending OTP:', error);
-    
-    // If Twilio Trial account fails due to unverified number, simulate success so testing isn't blocked
-    if (error.code === 21608 || error.status === 403) {
-      console.log(`[TWILIO BYPASS] Simulated OTP sent to ${phone} because number is unverified in Twilio Trial.`);
-      return res.status(200).json({ message: 'OTP sent successfully (Bypassed Twilio restriction)' });
-    }
-
     res.status(500).json({ error: 'Failed to send OTP' });
   }
 };
@@ -49,26 +41,16 @@ exports.verifyOtp = async (req, res) => {
   try {
     let isValid = false;
 
-    // If credentials are mock/placeholder, simulate verification
-    if (process.env.TWILIO_ACCOUNT_SID === 'your_twilio_account_sid') {
-      console.log(`[MOCK TWILIO] Verifying OTP ${code} for ${phone}`);
+    if (process.env.NODE_ENV === 'development') {
       isValid = (code === '123456');
+      console.log(`[BYPASS TWILIO] Verified OTP ${code} for ${phone} - Result: ${isValid}`);
     } else {
-      try {
-        const verificationCheck = await twilioClient.verify.v2.services(TWILIO_SERVICE_SID)
-          .verificationChecks
-          .create({ to: phone, code: code });
-        
-        isValid = verificationCheck.status === 'approved';
-      } catch (twilioErr) {
-        // If Twilio fails (e.g. unverified trial number), allow 123456 as a bypass
-        if (twilioErr.status === 404 || twilioErr.status === 403 || twilioErr.code === 20404) {
-          console.log(`[TWILIO BYPASS] Twilio verification failed. Checking if code is 123456 for bypass.`);
-          isValid = (code === '123456');
-        } else {
-          throw twilioErr;
-        }
-      }
+      const verification_check = await twilioClient.verify.v2.services(TWILIO_SERVICE_SID)
+        .verificationChecks
+        .create({ to: phone, code: code });
+      
+      isValid = (verification_check.status === 'approved');
+      console.log(`[TWILIO] Verified OTP ${code} for ${phone} - Result: ${isValid} (${verification_check.status})`);
     }
 
     if (!isValid) {

@@ -12,7 +12,11 @@ exports.getAccounts = async (req, res) => {
     );
 
     const [rows] = await pool.query(
-      'SELECT * FROM accounts WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+      `SELECT a.*, p.status as sync_status 
+       FROM accounts a 
+       LEFT JOIN plaid_items p ON a.item_id = p.item_id 
+       WHERE a.user_id = ? 
+       ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,
       [req.user.id, limit, offset]
     );
 
@@ -37,8 +41,11 @@ exports.getAccountById = async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await pool.query(
-      'SELECT * FROM accounts WHERE id = ? AND user_id = ?',
-      [id, req.user.id]
+      `SELECT a.*, p.status as sync_status 
+       FROM accounts a 
+       LEFT JOIN plaid_items p ON a.item_id = p.item_id 
+       WHERE a.id = ? AND a.user_id = ?`,
+      [req.params.id, req.user.id]
     );
 
     if (rows.length === 0) {
