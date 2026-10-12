@@ -2,12 +2,26 @@ const { pool } = require('../config/db');
 
 // Helper to calculate next billing date
 const calculateNextBillingDate = (startDate, cycle) => {
-  const d = new Date(startDate);
+  let d = new Date(startDate);
+  const today = new Date();
+  today.setHours(0,0,0,0);
+
+  // Initial bump
   if (cycle === 'yearly') {
     d.setFullYear(d.getFullYear() + 1);
   } else {
     d.setMonth(d.getMonth() + 1);
   }
+
+  // Roll forward if still in the past
+  while (d < today) {
+    if (cycle === 'yearly') {
+      d.setFullYear(d.getFullYear() + 1);
+    } else {
+      d.setMonth(d.getMonth() + 1);
+    }
+  }
+
   return d.toISOString().split('T')[0];
 };
 
@@ -110,7 +124,7 @@ exports.getSubscriptions = async (req, res) => {
 };
 
 exports.addSubscription = async (req, res) => {
-  const { name, amount, billing_cycle, start_date, status, source, category_id } = req.body;
+  const { name, amount, type, billing_cycle, start_date, status, source, category_id } = req.body;
 
   if (!name || !amount || !start_date) {
     return res.status(400).json({ error: 'Name, amount, and start_date are required' });
@@ -140,9 +154,9 @@ exports.addSubscription = async (req, res) => {
 
     const [result] = await connection.query(
       `INSERT INTO subscriptions 
-      (user_id, name, amount, billing_cycle, start_date, next_billing_date, status, source, category_id) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.id, trimmedName, amount, cycle, start_date, next_billing_date, subStatus, subSource, category_id || null]
+      (user_id, name, amount, type, billing_cycle, start_date, next_billing_date, status, source, category_id) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.id, trimmedName, amount, type || 'expense', cycle, start_date, next_billing_date, subStatus, subSource, category_id || null]
     );
 
     const subscriptionId = result.insertId;
@@ -163,7 +177,7 @@ exports.addSubscription = async (req, res) => {
 exports.updateSubscription = async (req, res) => {
   const { id } = req.params;
   const { 
-    name, amount, billing_cycle, start_date, status, source, category_id,
+    name, amount, type, billing_cycle, start_date, status, source, category_id,
     is_reminder_on, reminder_days, is_sms_enabled, is_email_enabled
   } = req.body;
 
@@ -190,7 +204,8 @@ exports.updateSubscription = async (req, res) => {
     // If category_id is explicitly passed as null, we should update it to null
     let updateQuery = `UPDATE subscriptions SET 
         name = COALESCE(?, name), 
-        amount = COALESCE(?, amount), 
+        amount = COALESCE(?, amount),
+        type = COALESCE(?, type), 
         billing_cycle = COALESCE(?, billing_cycle), 
         start_date = COALESCE(?, start_date),
         next_billing_date = ?, 
@@ -201,7 +216,7 @@ exports.updateSubscription = async (req, res) => {
         is_sms_enabled = COALESCE(?, is_sms_enabled),
         is_email_enabled = COALESCE(?, is_email_enabled)`;
     let updateParams = [
-        name, amount, billing_cycle, start_date, newNextBillingDate, status, source,
+        name, amount, type, billing_cycle, start_date, newNextBillingDate, status, source,
         is_reminder_on, reminder_days, is_sms_enabled, is_email_enabled
     ];
 

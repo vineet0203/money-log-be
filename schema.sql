@@ -94,6 +94,7 @@ CREATE TABLE `subscriptions` (
   `amount` decimal(10,2) NOT NULL,
   `billing_cycle` enum('monthly','yearly') NOT NULL DEFAULT 'monthly',
   `next_billing_date` date NOT NULL,
+  `type` enum('expense','income') NOT NULL DEFAULT 'expense',
   `status` enum('active','cancelled') NOT NULL DEFAULT 'active',
   `source` varchar(255) DEFAULT 'Manual Added',
   `is_reminder_on` tinyint(1) DEFAULT '0',

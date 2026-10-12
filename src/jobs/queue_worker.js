@@ -18,7 +18,7 @@ async function processNotificationQueue() {
     // 1. Fetch up to 500 pending notifications
     const [jobs] = await pool.query(`
       SELECT n.*, u.email, u.phone_number, u.timezone, 
-             s.name as subscription_name, s.amount, s.next_billing_date, s.status as sub_status, s.reminder_days
+             s.name as subscription_name, s.amount, s.next_billing_date, s.status as sub_status, s.reminder_days, s.type as sub_type
       FROM notification_queue n
       JOIN users u ON n.user_id = u.id
       JOIN subscriptions s ON n.subscription_id = s.id
@@ -68,7 +68,10 @@ async function processNotificationQueue() {
         continue;
       }
 
-      const messageText = `Your subscription ${job.subscription_name} ($${job.amount}) is due on ${dbDateStr}.`;
+      const isIncome = job.sub_type === 'income';
+      const verb = isIncome ? 'expected income' : 'subscription';
+      const action = isIncome ? 'expected' : 'due';
+      const messageText = `Your ${verb} ${job.subscription_name} (${job.amount}) is ${action} on ${dbDateStr}.`;
       
       try {
         if (job.type === 'email') {
@@ -81,18 +84,18 @@ async function processNotificationQueue() {
           console.log(`[Queue Worker] Attempting to send Email to ${job.email}`);
           const htmlContent = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <h2 style="color: #333;">Upcoming Payment Reminder</h2>
+              <h2 style="color: #333;">Upcoming ${isIncome ? "Income" : "Payment"} Reminder</h2>
               <p style="font-size: 16px; color: #555;">Hi there,</p>
-              <p style="font-size: 16px; color: #555;">This is a quick reminder that your subscription for <strong>${job.subscription_name}</strong> is coming up.</p>
+              <p style="font-size: 16px; color: #555;">This is a quick reminder that your ${isIncome ? "expected income" : "subscription"} for <strong>${job.subscription_name}</strong> is coming up.</p>
               <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <p style="margin: 0; font-size: 16px;"><strong>Amount Due:</strong> $${job.amount}</p>
+                <p style="margin: 0; font-size: 16px;"><strong>${isIncome ? "Amount Expected" : "Amount Due"}:</strong> $${job.amount}</p>
                 <p style="margin: 5px 0 0 0; font-size: 16px;"><strong>Due Date:</strong> ${dbDateStr}</p>
               </div>
               <p style="font-size: 14px; color: #777;">Thank you for using Money Log!</p>
             </div>
           `;
           
-          await sendEmail(job.email, `Upcoming Payment for ${job.subscription_name}`, messageText, htmlContent);
+          await sendEmail(job.email, `Upcoming ${isIncome ? "Income" : "Payment"} for ${job.subscription_name}`, messageText, htmlContent);
           await markJobStatus(job.id, 'sent');
         } 
         else if (job.type === 'sms') {
@@ -111,7 +114,7 @@ async function processNotificationQueue() {
           // regardless of whether they have remote push notifications enabled/working
           await pool.query(
             `INSERT INTO in_app_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`,
-            [job.user_id, 'Upcoming Subscription Payment', messageText, 'warning']
+            [job.user_id, isIncome ? 'Upcoming Income' : 'Upcoming Subscription Payment', messageText, isIncome ? 'info' : 'warning']
           );
 
           const [tokens] = await pool.query('SELECT push_token FROM user_push_tokens WHERE user_id = ?', [job.user_id]);
@@ -129,7 +132,7 @@ async function processNotificationQueue() {
               const messageObj = {
                 to: t.push_token,
                 sound: 'default',
-                title: 'Upcoming Subscription Payment',
+                title: isIncome ? 'Upcoming Income' : 'Upcoming Subscription Payment',
                 body: messageText,
                 data: { subscriptionId: job.subscription_id },
               };

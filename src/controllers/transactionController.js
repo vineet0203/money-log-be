@@ -13,19 +13,32 @@ const calculateNextBillingDate = (startDate, cycle) => {
 
 exports.getStats = async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT 
+    const { fromDate, toDate } = req.query;
+    
+    let query = `SELECT 
         SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
-       FROM transactions WHERE user_id = ?`,
-      [req.user.id]
-    );
+        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense,
+        MAX(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as highestExpense
+       FROM transactions WHERE user_id = ?`;
+    const params = [req.user.id];
+
+    if (fromDate) {
+      query += ' AND date >= ?';
+      params.push(fromDate);
+    }
+    if (toDate) {
+      query += ' AND date <= ?';
+      params.push(toDate);
+    }
+
+    const [rows] = await pool.query(query, params);
     
     const income = rows[0].income || 0;
     const expense = rows[0].expense || 0;
-    const balance = 0; // Keeping balance 0 as requested
+    const highestExpense = rows[0].highestExpense || 0;
+    const balance = income - expense;
 
-    res.status(200).json({ income, expense, balance });
+    res.status(200).json({ income, expense, balance, highestExpense });
   } catch (error) {
     console.error('Error fetching stats:', error);
     res.status(500).json({ error: 'Failed to fetch stats' });
@@ -36,20 +49,43 @@ exports.getTransactions = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 20;
     const offset = parseInt(req.query.offset) || 0;
-    const type = req.query.type; // 'all', 'income', 'expense'
+    const type = req.query.type;
+    const fromDate = req.query.fromDate;
+    const toDate = req.query.toDate;
 
-    let query = 'SELECT * FROM transactions WHERE user_id = ?';
+    let query = `SELECT t.*, c.name as category_name 
+                 FROM transactions t
+                 LEFT JOIN categories c ON t.category_id = c.id
+                 WHERE t.user_id = ?`;
+    let countQuery = `SELECT COUNT(*) as total FROM transactions t WHERE t.user_id = ?`;
     const params = [req.user.id];
+    const countParams = [req.user.id];
 
     if (type && type !== 'all') {
-      query += ' AND type = ?';
+      query += ' AND t.type = ?';
+      countQuery += ' AND t.type = ?';
       params.push(type);
+      countParams.push(type);
+    }
+    
+    if (fromDate) {
+      query += ' AND t.date >= ?';
+      countQuery += ' AND t.date >= ?';
+      params.push(fromDate);
+      countParams.push(fromDate);
+    }
+    if (toDate) {
+      query += ' AND t.date <= ?';
+      countQuery += ' AND t.date <= ?';
+      params.push(toDate);
+      countParams.push(toDate);
     }
 
-    query += ' ORDER BY date DESC, id DESC LIMIT ? OFFSET ?';
+    query += ' ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
     const [transactions] = await pool.query(query, params);
+    const [countRows] = await pool.query(countQuery, countParams);
     
     const nextOffset = transactions.length === limit ? offset + limit : null;
     
@@ -60,6 +96,7 @@ exports.getTransactions = async (req, res) => {
     
     res.status(200).json({
       data: transactionsWithUrls,
+      total: countRows[0].total,
       nextOffset
     });
   } catch (error) {
@@ -102,13 +139,15 @@ exports.createTransaction = async (req, res) => {
       const nextBillingDate = new Date(subToUpdate.next_billing_date);
       const diffTime = nextBillingDate.getTime() - today.getTime();
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
       const maxDays = subToUpdate.billing_cycle === 'yearly' ? 30 : 15;
       
       if (diffDays > maxDays) {
         await connection.rollback();
-        return res.status(400).json({ error: `Too early to pay. You can only pay up to ${maxDays} days before the due date for ${subToUpdate.billing_cycle} subscriptions.` });
+        const actionText = subToUpdate.type === 'income' ? 'accept payment' : 'pay';
+        return res.status(400).json({ error: `Too early! You can only ${actionText} up to ${maxDays} days before the due date.` });
       }
+      
+      
 
       newNextBillingDate = calculateNextBillingDate(subToUpdate.next_billing_date, subToUpdate.billing_cycle);
     }

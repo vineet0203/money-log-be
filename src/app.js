@@ -9,6 +9,8 @@ const transactionsRoutes = require('./routes/transactionRoutes');
 const reportsRoutes = require('./routes/reportRoutes');
 const usersRoutes = require('./routes/userRoutes');
 const notificationsRoutes = require('./routes/notificationRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+
 const plaidRoutes = require('./routes/plaidRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const devRoutes = require('./routes/devRoutes');
@@ -37,6 +39,8 @@ app.use('/api/transactions', transactionsRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+
 app.use('/api/plaid', plaidRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/dev', devRoutes);
