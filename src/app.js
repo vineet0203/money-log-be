@@ -45,6 +45,10 @@ app.use('/api/plaid', plaidRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/dev', devRoutes);
 
+// POS Autonomous Subsystem
+const posRoutes = require('./routes/pos');
+app.use('/api/pos', posRoutes);
+
 // Serve uploads statically
 app.use('/uploads', express.static('uploads'));
 

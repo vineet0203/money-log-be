@@ -24,7 +24,25 @@ async function run() {
       'transactions',
       'refresh_tokens',
       'in_app_notifications',
-      'notification_queue'
+      'notification_queue',
+      'pos_daily_aggregates',
+      'pos_shifts',
+      'pos_supplier_payments',
+      'pos_purchase_bills',
+      'pos_goods_receipts',
+      'pos_po_items',
+      'pos_purchase_orders',
+      'pos_suppliers',
+      'pos_exchanges',
+      'pos_returns',
+      'pos_order_payments',
+      'pos_order_items',
+      'pos_orders',
+      'pos_product_variants',
+      'pos_products',
+      'pos_brands',
+      'pos_categories',
+      'pos_settings'
     ];
 
     for (const table of tables) {
