@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS `pos_settings` (
   `receipt_header_note` VARCHAR(255) DEFAULT 'Welcome to our store!',
   `receipt_footer_note` VARCHAR(255) DEFAULT 'Thank you for your purchase!',
   `return_policy` VARCHAR(255) DEFAULT 'Returns accepted within 14 days with original receipt.',
+  `return_window_days` INT NOT NULL DEFAULT 14,
   `auto_print_receipt` TINYINT(1) NOT NULL DEFAULT 0,
   `cash_drawer_float` DECIMAL(12,2) NOT NULL DEFAULT 200.00,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -186,6 +187,43 @@ CREATE TABLE IF NOT EXISTS `pos_order_payments` (
   CONSTRAINT `fk_pos_pay_ord` FOREIGN KEY (`order_id`) REFERENCES `pos_orders` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- 8b. POS Order Receipt Config Snapshot (Frozen at time of checkout)
+CREATE TABLE IF NOT EXISTS `pos_order_receipt_configs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `order_id` BIGINT UNSIGNED NOT NULL,
+  `store_name` VARCHAR(150) NOT NULL DEFAULT 'MONEY LOG POS',
+  `store_logo_url` TEXT DEFAULT NULL,
+  `store_logo_initial` VARCHAR(10) DEFAULT 'M',
+  `store_tagline` VARCHAR(255) DEFAULT NULL,
+  `store_phone` VARCHAR(50) DEFAULT NULL,
+  `store_email` VARCHAR(150) DEFAULT NULL,
+  `address_line1` VARCHAR(255) DEFAULT NULL,
+  `address_line2` VARCHAR(255) DEFAULT NULL,
+  `city` VARCHAR(100) DEFAULT NULL,
+  `state` VARCHAR(100) DEFAULT NULL,
+  `postal_code` VARCHAR(50) DEFAULT NULL,
+  `tax_number` VARCHAR(100) DEFAULT NULL,
+  `receipt_header_note` TEXT DEFAULT NULL,
+  `receipt_footer_note` TEXT DEFAULT NULL,
+  `return_policy` TEXT DEFAULT NULL,
+  `return_window_days` INT NOT NULL DEFAULT 14,
+  `currency_symbol` VARCHAR(10) DEFAULT '$',
+  `paper_width` VARCHAR(50) DEFAULT '80mm',
+  `show_tax_breakdown` TINYINT(1) DEFAULT 1,
+  `show_cashier_name` TINYINT(1) DEFAULT 1,
+  `show_customer_info` TINYINT(1) DEFAULT 1,
+  `show_upi_qr_on_receipt` TINYINT(1) DEFAULT 1,
+  `upi_id` VARCHAR(100) DEFAULT NULL,
+  `upi_payee_name` VARCHAR(150) DEFAULT NULL,
+  `upi_qr_type` VARCHAR(50) DEFAULT 'auto',
+  `upi_qr_image_url` TEXT DEFAULT NULL,
+  `taxes_json` JSON DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_ord_cfg` (`order_id`),
+  CONSTRAINT `fk_ord_cfg_order` FOREIGN KEY (`order_id`) REFERENCES `pos_orders` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- 9. POS Returns & Exchanges
 CREATE TABLE IF NOT EXISTS `pos_returns` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -198,6 +236,8 @@ CREATE TABLE IF NOT EXISTS `pos_returns` (
   `status` ENUM('Processed', 'Pending') NOT NULL DEFAULT 'Processed',
   `reason` VARCHAR(255) DEFAULT NULL,
   `items_summary` TEXT DEFAULT NULL,
+  `returned_items_json` JSON DEFAULT NULL,
+  `notes` TEXT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_pos_ret_num` (`user_id`, `return_number`),
@@ -215,6 +255,10 @@ CREATE TABLE IF NOT EXISTS `pos_exchanges` (
   `returned_desc` VARCHAR(255) NOT NULL,
   `replacement_desc` VARCHAR(255) NOT NULL,
   `price_difference` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `payment_mode` VARCHAR(50) DEFAULT 'Cash',
+  `returned_items_json` JSON DEFAULT NULL,
+  `replacement_items_json` JSON DEFAULT NULL,
+  `notes` TEXT DEFAULT NULL,
   `status` ENUM('Completed', 'Pending') NOT NULL DEFAULT 'Completed',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

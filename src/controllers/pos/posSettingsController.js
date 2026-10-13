@@ -69,7 +69,8 @@ function formatSettingsResponse(row) {
     // Header, Footer & Policy
     receiptHeaderNote: row.receipt_header_note || '',
     receiptFooterNote: row.receipt_footer_note || '',
-    returnPolicy: row.return_policy || '',
+    returnPolicy: row.return_policy || 'Returns accepted within 14 days with original receipt.',
+    returnWindowDays: Number(row.return_window_days !== undefined ? row.return_window_days : 14),
 
     // Printing Preferences
     paperSize: row.paper_width || '80mm',
@@ -159,7 +160,7 @@ exports.updateSettings = async (req, res) => {
           store_phone, store_email, website, tax_number,
           taxes, default_tax_rate, currency_symbol, currency_code, is_tax_inclusive,
           upi_id, upi_payee_name, upi_qr_type, upi_qr_image_url,
-          receipt_header_note, receipt_footer_note, return_policy,
+          receipt_header_note, receipt_footer_note, return_policy, return_window_days,
           paper_width, show_tax_breakdown, show_cashier_name, show_customer_info,
           show_upi_qr_on_receipt, auto_print_receipt, cash_drawer_float
         ) VALUES (
@@ -168,7 +169,7 @@ exports.updateSettings = async (req, res) => {
           ?, ?, ?, ?,
           ?, ?, '$', 'USD', ?,
           ?, ?, ?, ?,
-          ?, ?, ?,
+          ?, ?, ?, ?,
           ?, ?, ?, ?,
           ?, ?, ?
         )`,
@@ -197,6 +198,7 @@ exports.updateSettings = async (req, res) => {
           validated.receiptHeaderNote || null,
           validated.receiptFooterNote || null,
           validated.returnPolicy || null,
+          validated.returnWindowDays !== undefined ? validated.returnWindowDays : 14,
           validated.paperSize || '80mm',
           validated.showTaxBreakdown !== undefined ? (validated.showTaxBreakdown ? 1 : 0) : 1,
           validated.showCashierName !== undefined ? (validated.showCashierName ? 1 : 0) : 1,
@@ -304,6 +306,10 @@ exports.updateSettings = async (req, res) => {
       if (validated.returnPolicy !== undefined) {
         fields.push('`return_policy` = ?');
         values.push(validated.returnPolicy);
+      }
+      if (validated.returnWindowDays !== undefined) {
+        fields.push('`return_window_days` = ?');
+        values.push(validated.returnWindowDays);
       }
       if (validated.paperSize !== undefined) {
         fields.push('`paper_width` = ?');

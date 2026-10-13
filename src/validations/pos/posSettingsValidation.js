@@ -33,6 +33,7 @@ const updatePosSettingsSchema = z.object({
   receiptHeaderNote: z.string().trim().max(255).nullable().optional(),
   receiptFooterNote: z.string().trim().max(255).nullable().optional(),
   returnPolicy: z.string().trim().max(255).nullable().optional(),
+  returnWindowDays: z.coerce.number().int().min(0).max(365).optional(),
 
   paperSize: z.string().trim().max(20).optional(),
   showTaxBreakdown: z.boolean().optional(),
