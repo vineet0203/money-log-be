@@ -7,6 +7,9 @@ const productRoutes = require('./productRoutes');
 const settingsRoutes = require('./settingsRoutes');
 const orderRoutes = require('./orderRoutes');
 const returnRoutes = require('./returnRoutes');
+const supplierRoutes = require('./supplierRoutes');
+const purchaseRoutes = require('./purchaseRoutes');
+const reportRoutes = require('./reportRoutes');
 
 // Mount standalone POS sub-resources
 router.use('/categories', categoryRoutes);
@@ -15,5 +18,8 @@ router.use('/products', productRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/orders', orderRoutes);
 router.use('/returns', returnRoutes);
+router.use('/suppliers', supplierRoutes);
+router.use('/purchases', purchaseRoutes);
+router.use('/reports', reportRoutes);
 
 module.exports = router;
