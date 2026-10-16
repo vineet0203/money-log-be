@@ -76,6 +76,7 @@ exports.getSubscriptions = async (req, res) => {
     const offset = (page - 1) * limit;
     const status = req.query.status;
     const category_id = req.query.category_id;
+    const search = req.query.search;
 
     let selectQuery = `
       SELECT s.*, 
@@ -98,6 +99,11 @@ exports.getSubscriptions = async (req, res) => {
     if (category_id && category_id !== 'all') {
       selectQuery += ` AND s.category_id = ?`;
       params.push(category_id);
+    }
+
+    if (search && search.trim()) {
+      selectQuery += ` AND s.name LIKE ?`;
+      params.push(`%${search.trim()}%`);
     }
 
     if (status && status !== 'All') {

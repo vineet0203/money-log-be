@@ -204,16 +204,18 @@ exports.getDashboardAnalytics = async (req, res) => {
 };
 
 /**
- * Generic Time-Series API (§3.2)
- * GET /api/reports/series?metric=expense|income|net&from=&to=&granularity=day|week|month&category_id=
+ * Generic Time-Series API (§3.2 / §3A.1)
+ * GET /api/reports/series?metric=expense|income|net|cumulative_net&from=&to=&granularity=day|week|month&category_id=
  * Returns { points: [{ period, label, amount }], total, previous_total, change_pct }
  */
 exports.getSeriesReport = async (req, res) => {
   try {
     const userId = req.user.id;
-    let { metric = 'expense', from, to, granularity, category_id } = req.query;
+    let { metric = 'expense', from, to, fromDate: qFromDate, toDate: qToDate, granularity, category_id } = req.query;
+    from = from || qFromDate;
+    to = to || qToDate;
 
-    if (!['expense', 'income', 'net'].includes(metric)) {
+    if (!['expense', 'income', 'net', 'cumulative_net'].includes(metric)) {
       metric = 'expense';
     }
 
@@ -252,7 +254,7 @@ exports.getSeriesReport = async (req, res) => {
     } else if (metric === 'income') {
       metricExpr = "SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END)";
     } else {
-      // net = income - expense
+      // net or cumulative_net = income - expense
       metricExpr = "SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END)";
     }
 
@@ -326,6 +328,18 @@ exports.getSeriesReport = async (req, res) => {
       }));
     }
 
+    // §3A.1 & §3A.5: cumulative_net is the running sum of income - expense across the window
+    if (metric === 'cumulative_net') {
+      let runningTotal = 0;
+      points = points.map(p => {
+        runningTotal += p.amount;
+        return {
+          ...p,
+          amount: parseFloat(runningTotal.toFixed(2)),
+        };
+      });
+    }
+
     // 2. Fetch total for current period
     let totalQuery = `SELECT ${metricExpr} as total FROM transactions WHERE user_id = ? AND date >= ? AND date <= ?`;
     const totalParams = [userId, from, to];
@@ -368,6 +382,246 @@ exports.getSeriesReport = async (req, res) => {
   } catch (error) {
     console.error('Error in getSeriesReport:', error);
     res.status(500).json({ error: 'Failed to generate time-series report' });
+  }
+};
+
+/**
+ * Generic Breakdown API (§3A.1)
+ * GET /api/reports/breakdown?dimension=category|day_of_week|recurrence&from=&to=&type=&search=&category_id=
+ * Returns { dimension, from, to, items: [{ key, label, color, current, previous, delta, share }] }
+ */
+exports.getBreakdownReport = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    let { dimension = 'category', from, to, fromDate: qFromDate, toDate: qToDate, type, category_id, search, has_receipt } = req.query;
+    from = from || qFromDate;
+    to = to || qToDate;
+
+    // Default window to current month if not provided
+    const now = new Date();
+    if (!to) {
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      to = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+    if (!from) {
+      from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    }
+
+    const fromD = new Date(from);
+    const toD = new Date(to);
+    const diffTime = Math.max(0, toD.getTime() - fromD.getTime());
+    const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+
+    const prevToD = new Date(fromD.getTime() - 24 * 60 * 60 * 1000);
+    const prevFromD = new Date(prevToD.getTime() - (diffDays - 1) * 24 * 60 * 60 * 1000);
+    const prevTo = prevToD.toISOString().split('T')[0];
+    const prevFrom = prevFromD.toISOString().split('T')[0];
+
+    const buildFilterClause = (winFrom, winTo, alias = 't') => {
+      let clause = ` AND ${alias}.date >= ? AND ${alias}.date <= ?`;
+      const params = [winFrom, winTo];
+      if (type && type !== 'all') {
+        clause += ` AND ${alias}.type = ?`;
+        params.push(type);
+      }
+      if (category_id) {
+        clause += ` AND ${alias}.category_id = ?`;
+        params.push(category_id);
+      }
+      if (search) {
+        clause += ` AND (${alias}.title LIKE ? OR ${alias}.description LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`);
+      }
+      if (has_receipt === 'true' || has_receipt === true) {
+        clause += ` AND ${alias}.receipt_url IS NOT NULL AND ${alias}.receipt_url != ""`;
+      }
+      return { clause, params };
+    };
+
+    let items = [];
+
+    if (dimension === 'day_of_week') {
+      // Group by DAYOFWEEK(date) (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+      const dayLabels = ['', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayColors = ['', '#64748b', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#3b82f6'];
+
+      const curFilter = buildFilterClause(from, to);
+      const [curRows] = await pool.query(
+        `SELECT DAYOFWEEK(date) as dow, SUM(amount) as total
+         FROM transactions t
+         WHERE t.user_id = ? ${curFilter.clause}
+         GROUP BY dow`,
+        [userId, ...curFilter.params]
+      );
+
+      const prevFilter = buildFilterClause(prevFrom, prevTo);
+      const [prevRows] = await pool.query(
+        `SELECT DAYOFWEEK(date) as dow, SUM(amount) as total
+         FROM transactions t
+         WHERE t.user_id = ? ${prevFilter.clause}
+         GROUP BY dow`,
+        [userId, ...prevFilter.params]
+      );
+
+      const curMap = {};
+      let totalAmount = 0;
+      curRows.forEach(r => {
+        const val = parseFloat(r.total || 0);
+        curMap[r.dow] = val;
+        totalAmount += val;
+      });
+
+      const prevMap = {};
+      prevRows.forEach(r => {
+        prevMap[r.dow] = parseFloat(r.total || 0);
+      });
+
+      for (let d = 1; d <= 7; d++) {
+        const curVal = curMap[d] || 0;
+        const prevVal = prevMap[d] !== undefined ? prevMap[d] : null;
+        let delta = null;
+        if (prevVal && prevVal > 0) {
+          delta = parseFloat((((curVal - prevVal) / prevVal) * 100).toFixed(2));
+        }
+        const share = totalAmount > 0 ? parseFloat(((curVal / totalAmount) * 100).toFixed(1)) : 0;
+        items.push({
+          key: `dow_${d}`,
+          label: dayLabels[d],
+          color: dayColors[d],
+          current: curVal,
+          previous: prevVal,
+          delta,
+          share,
+        });
+      }
+    } else if (dimension === 'recurrence') {
+      // Recurring (subscription_id IS NOT NULL) vs One-off
+      const curFilter = buildFilterClause(from, to);
+      const [curRows] = await pool.query(
+        `SELECT 
+           CASE WHEN subscription_id IS NOT NULL THEN 'recurring' ELSE 'one_off' END as rec_type,
+           SUM(amount) as total
+         FROM transactions t
+         WHERE t.user_id = ? ${curFilter.clause}
+         GROUP BY rec_type`,
+        [userId, ...curFilter.params]
+      );
+
+      const prevFilter = buildFilterClause(prevFrom, prevTo);
+      const [prevRows] = await pool.query(
+        `SELECT 
+           CASE WHEN subscription_id IS NOT NULL THEN 'recurring' ELSE 'one_off' END as rec_type,
+           SUM(amount) as total
+         FROM transactions t
+         WHERE t.user_id = ? ${prevFilter.clause}
+         GROUP BY rec_type`,
+        [userId, ...prevFilter.params]
+      );
+
+      const curMap = { recurring: 0, one_off: 0 };
+      let totalAmount = 0;
+      curRows.forEach(r => {
+        const val = parseFloat(r.total || 0);
+        curMap[r.rec_type] = val;
+        totalAmount += val;
+      });
+
+      const prevMap = {};
+      prevRows.forEach(r => {
+        prevMap[r.rec_type] = parseFloat(r.total || 0);
+      });
+
+      const recTypes = [
+        { key: 'recurring', label: 'Recurring Subscriptions', color: '#f59e0b' },
+        { key: 'one_off', label: 'One-off Expenses', color: '#10b981' },
+      ];
+
+      items = recTypes.map(rt => {
+        const curVal = curMap[rt.key] || 0;
+        const prevVal = prevMap[rt.key] !== undefined ? prevMap[rt.key] : null;
+        let delta = null;
+        if (prevVal && prevVal > 0) {
+          delta = parseFloat((((curVal - prevVal) / prevVal) * 100).toFixed(2));
+        }
+        const share = totalAmount > 0 ? parseFloat(((curVal / totalAmount) * 100).toFixed(1)) : 0;
+        return {
+          key: rt.key,
+          label: rt.label,
+          color: rt.color,
+          current: curVal,
+          previous: prevVal,
+          delta,
+          share,
+        };
+      });
+    } else {
+      // Default: category breakdown
+      const curFilter = buildFilterClause(from, to);
+      const [curRows] = await pool.query(
+        `SELECT 
+           COALESCE(c.id, 0) as category_id,
+           COALESCE(c.name, 'Uncategorized') as category_name,
+           COALESCE(c.color, '#94a3b8') as category_color,
+           SUM(t.amount) as total
+         FROM transactions t
+         LEFT JOIN categories c ON t.category_id = c.id
+         WHERE t.user_id = ? ${curFilter.clause}
+         GROUP BY c.id, c.name, c.color
+         ORDER BY total DESC`,
+        [userId, ...curFilter.params]
+      );
+
+      const prevFilter = buildFilterClause(prevFrom, prevTo);
+      const [prevRows] = await pool.query(
+        `SELECT 
+           COALESCE(c.id, 0) as category_id,
+           SUM(t.amount) as total
+         FROM transactions t
+         LEFT JOIN categories c ON t.category_id = c.id
+         WHERE t.user_id = ? ${prevFilter.clause}
+         GROUP BY c.id`,
+        [userId, ...prevFilter.params]
+      );
+
+      const prevMap = {};
+      prevRows.forEach(r => {
+        prevMap[r.category_id] = parseFloat(r.total || 0);
+      });
+
+      let totalAmount = 0;
+      curRows.forEach(r => {
+        totalAmount += parseFloat(r.total || 0);
+      });
+
+      items = curRows.map(r => {
+        const curVal = parseFloat(r.total || 0);
+        const prevVal = prevMap[r.category_id] !== undefined ? prevMap[r.category_id] : null;
+        let delta = null;
+        if (prevVal && prevVal > 0) {
+          delta = parseFloat((((curVal - prevVal) / prevVal) * 100).toFixed(2));
+        }
+        const share = totalAmount > 0 ? parseFloat(((curVal / totalAmount) * 100).toFixed(1)) : 0;
+        return {
+          key: String(r.category_id),
+          label: r.category_name,
+          color: r.category_color,
+          current: curVal,
+          previous: prevVal,
+          delta,
+          share,
+        };
+      });
+    }
+
+    res.status(200).json({
+      dimension,
+      from,
+      to,
+      items,
+    });
+  } catch (error) {
+    console.error('Error generating breakdown report:', error);
+    res.status(500).json({ error: 'Failed to generate breakdown report' });
   }
 };
 

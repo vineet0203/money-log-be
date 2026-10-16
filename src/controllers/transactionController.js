@@ -40,49 +40,206 @@ const formatTransactionRow = (req, tx) => {
   };
 };
 
+/**
+ * Compute aggregate stats for a specific date window & filters
+ */
+const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterType, filterCategoryId, filterSearch, filterReceipt) => {
+  let query = `SELECT 
+      SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE 0 END) as income,
+      SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END) as expense,
+      MAX(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END) as highestExpense,
+      COUNT(*) as count,
+      SUM(CASE WHEN t.type = 'income' THEN 1 ELSE 0 END) as incomeCount,
+      SUM(CASE WHEN t.type = 'expense' THEN 1 ELSE 0 END) as expenseCount,
+      AVG(CASE WHEN t.type = 'income' THEN t.amount ELSE NULL END) as incomeAverage,
+      AVG(CASE WHEN t.type = 'expense' THEN t.amount ELSE NULL END) as expenseAverage,
+      AVG(t.amount) as overallAverage
+     FROM transactions t
+     WHERE t.user_id = ?`;
+  const params = [userId];
+
+  if (winFrom) {
+    query += ' AND t.date >= ?';
+    params.push(winFrom);
+  }
+  if (winTo) {
+    query += ' AND t.date <= ?';
+    params.push(winTo);
+  }
+  if (filterType && filterType !== 'all') {
+    query += ' AND t.type = ?';
+    params.push(filterType);
+  }
+  if (filterCategoryId) {
+    query += ' AND t.category_id = ?';
+    params.push(filterCategoryId);
+  }
+  if (filterSearch) {
+    query += ' AND (t.title LIKE ? OR t.description LIKE ?)';
+    params.push(`%${filterSearch}%`, `%${filterSearch}%`);
+  }
+  if (filterReceipt === 'true' || filterReceipt === true) {
+    query += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
+  }
+
+  const [rows] = await pool.query(query, params);
+  const row = rows[0] || {};
+
+  const income = parseFloat(row.income || 0);
+  const expense = parseFloat(row.expense || 0);
+  const highestExpense = parseFloat(row.highestExpense || 0);
+  const count = parseInt(row.count || 0, 10);
+  const incomeCount = parseInt(row.incomeCount || 0, 10);
+  const expenseCount = parseInt(row.expenseCount || 0, 10);
+  const incomeAverage = parseFloat(row.incomeAverage || 0);
+  const expenseAverage = parseFloat(row.expenseAverage || 0);
+  const overallAverage = parseFloat(row.overallAverage || 0);
+  const balance = income - expense;
+
+  let average = overallAverage;
+  if (filterType === 'income') average = incomeAverage;
+  else if (filterType === 'expense') average = expenseAverage;
+
+  let largest = null;
+  let smallest = null;
+
+  if (count > 0) {
+    let orderQuery = `SELECT t.id, t.title, t.amount, t.type, t.date, c.name as category_name
+                      FROM transactions t
+                      LEFT JOIN categories c ON t.category_id = c.id
+                      WHERE t.user_id = ?`;
+    const orderParams = [userId];
+    if (winFrom) {
+      orderQuery += ' AND t.date >= ?';
+      orderParams.push(winFrom);
+    }
+    if (winTo) {
+      orderQuery += ' AND t.date <= ?';
+      orderParams.push(winTo);
+    }
+    if (filterType && filterType !== 'all') {
+      orderQuery += ' AND t.type = ?';
+      orderParams.push(filterType);
+    }
+    if (filterCategoryId) {
+      orderQuery += ' AND t.category_id = ?';
+      orderParams.push(filterCategoryId);
+    }
+    if (filterSearch) {
+      orderQuery += ' AND (t.title LIKE ? OR t.description LIKE ?)';
+      orderParams.push(`%${filterSearch}%`, `%${filterSearch}%`);
+    }
+    if (filterReceipt === 'true' || filterReceipt === true) {
+      orderQuery += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
+    }
+
+    const [maxRows] = await pool.query(`${orderQuery} ORDER BY t.amount DESC, t.id DESC LIMIT 1`, orderParams);
+    const [minRows] = await pool.query(`${orderQuery} ORDER BY t.amount ASC, t.id ASC LIMIT 1`, orderParams);
+
+    if (maxRows.length > 0) {
+      largest = {
+        id: maxRows[0].id,
+        title: maxRows[0].title,
+        amount: parseFloat(maxRows[0].amount || 0),
+        type: maxRows[0].type,
+        date: maxRows[0].date,
+        category_name: maxRows[0].category_name || 'Uncategorized',
+      };
+    }
+    if (minRows.length > 0) {
+      smallest = {
+        id: minRows[0].id,
+        title: minRows[0].title,
+        amount: parseFloat(minRows[0].amount || 0),
+        type: minRows[0].type,
+        date: minRows[0].date,
+        category_name: minRows[0].category_name || 'Uncategorized',
+      };
+    }
+  }
+
+  return {
+    income,
+    expense,
+    balance,
+    highestExpense,
+    count,
+    incomeCount,
+    expenseCount,
+    average,
+    incomeAverage,
+    expenseAverage,
+    largest,
+    smallest,
+  };
+};
+
 exports.getStats = async (req, res) => {
   try {
-    const { fromDate, toDate, type, category_id, search, has_receipt } = req.query;
-    
-    let query = `SELECT 
-        SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense,
-        MAX(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as highestExpense
-       FROM transactions WHERE user_id = ?`;
-    const params = [req.user.id];
+    const { fromDate, toDate, from, to, type, category_id, search, has_receipt, compare } = req.query;
+    const effectiveFrom = fromDate || from;
+    const effectiveTo = toDate || to;
 
-    if (fromDate) {
-      query += ' AND date >= ?';
-      params.push(fromDate);
-    }
-    if (toDate) {
-      query += ' AND date <= ?';
-      params.push(toDate);
-    }
-    if (type && type !== 'all') {
-      query += ' AND type = ?';
-      params.push(type);
-    }
-    if (category_id) {
-      query += ' AND category_id = ?';
-      params.push(category_id);
-    }
-    if (search) {
-      query += ' AND (title LIKE ? OR description LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
-    }
-    if (has_receipt === 'true' || has_receipt === true) {
-      query += ' AND receipt_url IS NOT NULL AND receipt_url != ""';
+    const current = await computeTransactionStatsForWindow(
+      req.user.id,
+      effectiveFrom,
+      effectiveTo,
+      type,
+      category_id,
+      search,
+      has_receipt
+    );
+
+    let previous = null;
+    let delta = null;
+
+    if (compare === 'previous' && effectiveFrom && effectiveTo) {
+      const fromD = new Date(effectiveFrom);
+      const toD = new Date(effectiveTo);
+      const diffTime = Math.max(0, toD.getTime() - fromD.getTime());
+      const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+
+      const prevToD = new Date(fromD.getTime() - 24 * 60 * 60 * 1000);
+      const prevFromD = new Date(prevToD.getTime() - (diffDays - 1) * 24 * 60 * 60 * 1000);
+
+      const prevFrom = prevFromD.toISOString().split('T')[0];
+      const prevTo = prevToD.toISOString().split('T')[0];
+
+      const prevStats = await computeTransactionStatsForWindow(
+        req.user.id,
+        prevFrom,
+        prevTo,
+        type,
+        category_id,
+        search,
+        has_receipt
+      );
+
+      // §3A.1 & §3A.4: If no preceding data, return null rather than zeros
+      if (prevStats.count > 0 || prevStats.income > 0 || prevStats.expense > 0) {
+        previous = prevStats;
+
+        const calcDelta = (cur, prev) => {
+          if (prev === null || prev === undefined || prev === 0) return null;
+          return parseFloat((((cur - prev) / Math.abs(prev)) * 100).toFixed(2));
+        };
+
+        delta = {
+          income: calcDelta(current.income, prevStats.income),
+          expense: calcDelta(current.expense, prevStats.expense),
+          balance: calcDelta(current.balance, prevStats.balance),
+          count: calcDelta(current.count, prevStats.count),
+          average: calcDelta(current.average, prevStats.average),
+        };
+      }
     }
 
-    const [rows] = await pool.query(query, params);
-    
-    const income = parseFloat(rows[0]?.income || 0);
-    const expense = parseFloat(rows[0]?.expense || 0);
-    const highestExpense = parseFloat(rows[0]?.highestExpense || 0);
-    const balance = income - expense;
-
-    res.status(200).json({ income, expense, balance, highestExpense });
+    res.status(200).json({
+      ...current,
+      current,
+      previous,
+      delta,
+    });
   } catch (error) {
     console.error('Error fetching stats:', error);
     res.status(500).json({ error: 'Failed to fetch stats' });

@@ -7,6 +7,7 @@ const { reportsLimiter } = require('../middleware/rateLimiters');
 router.use(verifyToken);
 router.use(reportsLimiter);
 router.get('/series', reportController.getSeriesReport);
+router.get('/breakdown', reportController.getBreakdownReport);
 router.get('/monthly', reportController.getMonthlyReport);
 router.get('/dashboard', reportController.getDashboardAnalytics);
 
