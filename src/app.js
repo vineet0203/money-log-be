@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -50,7 +51,7 @@ const posRoutes = require('./routes/pos');
 app.use('/api/pos', posRoutes);
 
 // Serve uploads statically
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 const errorHandler = require('./middleware/errorHandler');
 
