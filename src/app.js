@@ -52,8 +52,18 @@ app.use('/api/pos', posRoutes);
 // Serve uploads statically
 app.use('/uploads', express.static('uploads'));
 
+const errorHandler = require('./middleware/errorHandler');
+
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to money-log API' });
 });
+
+// 404 Handler for undefined API routes
+app.use((req, res, next) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+
+// Global Express Error Handler (§5.3)
+app.use(errorHandler);
 
 module.exports = app;

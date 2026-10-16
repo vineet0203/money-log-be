@@ -4,24 +4,26 @@ const multer = require('multer');
 const path = require('path');
 const transactionController = require('../controllers/transactionController');
 const { verifyToken } = require('../middleware/authMiddleware');
+const validate = require('../middleware/validate');
+const {
+  createTransactionSchema,
+  updateTransactionSchema,
+  transactionIdParamSchema,
+  listTransactionsQuerySchema,
+} = require('../validations/transactions/transactionValidation');
 
-// Configure multer for local storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/')
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
-  }
-})
-const upload = multer({ storage: storage })
+const { getUploadMiddleware } = require('../services/storageService');
+
+// Configure single storage boundary upload middleware (§7)
+const upload = getUploadMiddleware('receipts', 5);
 
 router.use(verifyToken);
 
 router.get('/stats', transactionController.getStats);
-router.get('/', transactionController.getTransactions);
-router.post('/', upload.single('receipt'), transactionController.createTransaction);
-router.get('/:id', transactionController.getTransactionById);
+router.get('/', validate(listTransactionsQuerySchema), transactionController.getTransactions);
+router.post('/', upload.single('receipt'), validate(createTransactionSchema), transactionController.createTransaction);
+router.get('/:id', validate(transactionIdParamSchema), transactionController.getTransactionById);
+router.put('/:id', upload.single('receipt'), validate(updateTransactionSchema), transactionController.updateTransaction);
+router.delete('/:id', validate(transactionIdParamSchema), transactionController.deleteTransaction);
 
 module.exports = router;

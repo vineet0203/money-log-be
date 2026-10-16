@@ -57,8 +57,8 @@ exports.updateCategory = async (req, res) => {
     }
 
     await pool.query(
-      'UPDATE categories SET name = ?, icon_name = ?, color = ?, budget_limit = ? WHERE id = ?',
-      [name, icon_name || null, color || null, budget_limit || null, categoryId]
+      'UPDATE categories SET name = ?, icon_name = ?, color = ?, budget_limit = ? WHERE id = ? AND user_id = ?',
+      [name, icon_name || null, color || null, budget_limit || null, categoryId, req.user.id]
     );
 
     res.status(200).json({ message: 'Category updated successfully' });

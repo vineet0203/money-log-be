@@ -33,7 +33,7 @@ exports.createBrand = async (req, res) => {
       [userId, name.trim(), logo_url || null]
     );
 
-    const [newRow] = await pool.query('SELECT * FROM pos_brands WHERE id = ?', [result.insertId]);
+    const [newRow] = await pool.query('SELECT * FROM pos_brands WHERE id = ? AND user_id = ?', [result.insertId, userId]);
     res.status(201).json({ success: true, data: newRow[0] });
   } catch (error) {
     console.error('Error creating POS brand:', error);

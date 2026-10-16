@@ -79,14 +79,24 @@ CREATE TABLE `subscriptions` (
   `start_date` DATE NOT NULL DEFAULT (CURDATE()),
   `amount` DECIMAL(10,2) NOT NULL,
   `billing_cycle` ENUM('monthly','yearly') NOT NULL DEFAULT 'monthly',
+  `frequency` ENUM('daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'half_yearly', 'yearly', 'custom') NOT NULL DEFAULT 'monthly',
+  `interval_count` INT NOT NULL DEFAULT 1,
+  `by_month_day` INT DEFAULT NULL,
+  `by_weekday` TINYINT DEFAULT NULL,
+  `end_mode` ENUM('never', 'on_date', 'after_n') NOT NULL DEFAULT 'never',
+  `end_date` DATE DEFAULT NULL,
+  `occurrences_total` INT DEFAULT NULL,
+  `auto_post` TINYINT(1) NOT NULL DEFAULT 0,
+  `generated_through` DATE DEFAULT NULL,
   `next_billing_date` DATE NOT NULL,
   `type` ENUM('expense','income') NOT NULL DEFAULT 'expense',
-  `status` ENUM('active','cancelled') NOT NULL DEFAULT 'active',
+  `status` ENUM('active','paused','cancelled') NOT NULL DEFAULT 'active',
   `source` VARCHAR(255) DEFAULT 'Manual Added',
   `is_reminder_on` TINYINT(1) DEFAULT 0,
   `reminder_days` INT DEFAULT 3,
   `is_sms_enabled` TINYINT(1) DEFAULT 0,
   `is_email_enabled` TINYINT(1) DEFAULT 0,
+  `is_push_enabled` TINYINT(1) DEFAULT 0,
   `last_reminder_sent_date` DATE DEFAULT NULL,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -95,6 +105,28 @@ CREATE TABLE `subscriptions` (
   KEY `idx_subscriptions_category` (`category_id`),
   CONSTRAINT `fk_subscriptions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_subscriptions_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+DROP TABLE IF EXISTS `recurring_occurrences`;
+CREATE TABLE `recurring_occurrences` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `recurring_id` INT NOT NULL,
+  `due_date` DATE NOT NULL,
+  `amount` DECIMAL(10,2) NOT NULL,
+  `status` ENUM('due', 'paid', 'skipped', 'missed', 'cancelled') NOT NULL DEFAULT 'due',
+  `transaction_id` INT DEFAULT NULL,
+  `paid_at` TIMESTAMP NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_recurring_due` (`recurring_id`, `due_date`),
+  KEY `idx_user_status_due` (`user_id`, `status`, `due_date`),
+  KEY `idx_recurring_id` (`recurring_id`),
+  KEY `idx_transaction_id` (`transaction_id`),
+  CONSTRAINT `fk_recurring_occ_sub` FOREIGN KEY (`recurring_id`) REFERENCES `subscriptions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_recurring_occ_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_recurring_occ_tx` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 DROP TABLE IF EXISTS `transactions`;

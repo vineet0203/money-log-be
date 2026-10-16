@@ -6,6 +6,13 @@ const { processNotificationQueue } = require('./src/jobs/queue_worker');
 
 const PORT = process.env.PORT || 5000;
 
+const { processRecurringJob } = require('./src/services/recurringService');
+
+// Schedule Recurring Transactions Engine hourly at minute 5
+cron.schedule('5 * * * *', () => {
+  processRecurringJob();
+});
+
 // Schedule the Seeder to run every hour at minute 0
 cron.schedule('0 * * * *', () => {
   seedNotificationQueue();

@@ -76,7 +76,7 @@ exports.addAccount = async (req, res) => {
       [req.user.id, accountType, name, account_number, holder_name, expiry_date, provider, external_id]
     );
 
-    const [newAccount] = await pool.query('SELECT * FROM accounts WHERE id = ?', [result.insertId]);
+    const [newAccount] = await pool.query('SELECT * FROM accounts WHERE id = ? AND user_id = ?', [result.insertId, req.user.id]);
     res.status(201).json(newAccount[0]);
   } catch (error) {
     console.error('Error adding account:', error);
@@ -104,11 +104,11 @@ exports.updateAccount = async (req, res) => {
         expiry_date = COALESCE(?, expiry_date),
         provider = COALESCE(?, provider),
         external_id = COALESCE(?, external_id)
-      WHERE id = ?`,
-      [type, name, account_number, holder_name, expiry_date, provider, external_id, id]
+      WHERE id = ? AND user_id = ?`,
+      [type, name, account_number, holder_name, expiry_date, provider, external_id, id, req.user.id]
     );
 
-    const [updated] = await pool.query('SELECT * FROM accounts WHERE id = ?', [id]);
+    const [updated] = await pool.query('SELECT * FROM accounts WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.status(200).json(updated[0]);
   } catch (error) {
     console.error('Error updating account:', error);

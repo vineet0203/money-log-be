@@ -203,3 +203,172 @@ exports.getDashboardAnalytics = async (req, res) => {
   }
 };
 
+/**
+ * Generic Time-Series API (§3.2)
+ * GET /api/reports/series?metric=expense|income|net&from=&to=&granularity=day|week|month&category_id=
+ * Returns { points: [{ period, label, amount }], total, previous_total, change_pct }
+ */
+exports.getSeriesReport = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    let { metric = 'expense', from, to, granularity, category_id } = req.query;
+
+    if (!['expense', 'income', 'net'].includes(metric)) {
+      metric = 'expense';
+    }
+
+    // Default to current month if from / to not supplied
+    const now = new Date();
+    if (!to) {
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      to = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+    if (!from) {
+      from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    }
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    const diffTime = Math.max(0, toDate.getTime() - fromDate.getTime());
+    const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+
+    // Auto-select granularity if not specified
+    if (!granularity) {
+      if (diffDays > 90) granularity = 'month';
+      else if (diffDays > 31) granularity = 'week';
+      else granularity = 'day';
+    }
+
+    // Previous comparison period calculation
+    const prevToDate = new Date(fromDate.getTime() - 24 * 60 * 60 * 1000);
+    const prevFromDate = new Date(prevToDate.getTime() - (diffDays - 1) * 24 * 60 * 60 * 1000);
+    const prevTo = prevToDate.toISOString().split('T')[0];
+    const prevFrom = prevFromDate.toISOString().split('T')[0];
+
+    // Determine MySQL metric aggregation expression
+    let metricExpr = '';
+    if (metric === 'expense') {
+      metricExpr = "SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END)";
+    } else if (metric === 'income') {
+      metricExpr = "SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END)";
+    } else {
+      // net = income - expense
+      metricExpr = "SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END)";
+    }
+
+    // Determine grouping period format
+    let periodExpr = '';
+    if (granularity === 'month') {
+      periodExpr = "DATE_FORMAT(date, '%Y-%m')";
+    } else if (granularity === 'week') {
+      periodExpr = "DATE_FORMAT(DATE_SUB(date, INTERVAL WEEKDAY(date) DAY), '%Y-%m-%d')";
+    } else {
+      periodExpr = "DATE_FORMAT(date, '%Y-%m-%d')";
+    }
+
+    // 1. Fetch series points for current period
+    let seriesQuery = `SELECT ${periodExpr} as period, ${metricExpr} as amount
+                       FROM transactions
+                       WHERE user_id = ? AND date >= ? AND date <= ?`;
+    const seriesParams = [userId, from, to];
+
+    if (category_id) {
+      seriesQuery += ' AND category_id = ?';
+      seriesParams.push(category_id);
+    }
+
+    seriesQuery += ` GROUP BY period ORDER BY period ASC`;
+    const [rows] = await pool.query(seriesQuery, seriesParams);
+
+    // Map rows by period
+    const rowMap = {};
+    rows.forEach(r => {
+      rowMap[r.period] = parseFloat(r.amount || 0);
+    });
+
+    // Helper to format human label
+    const formatLabel = (p) => {
+      try {
+        if (granularity === 'month') {
+          const [y, m] = p.split('-');
+          return new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+        }
+        if (granularity === 'week') {
+          const d = new Date(p);
+          return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        const [y, m, d] = p.split('-');
+        return new Date(parseInt(y), parseInt(m) - 1, parseInt(d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch (e) {
+        return p;
+      }
+    };
+
+    // Fill continuous series if daily and span <= 62 days
+    let points = [];
+    if (granularity === 'day' && diffDays <= 62) {
+      const cur = new Date(from);
+      const end = new Date(to);
+      while (cur <= end) {
+        const p = cur.toISOString().split('T')[0];
+        points.push({
+          period: p,
+          label: formatLabel(p),
+          amount: rowMap[p] !== undefined ? rowMap[p] : 0,
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      points = rows.map(r => ({
+        period: r.period,
+        label: formatLabel(r.period),
+        amount: parseFloat(r.amount || 0),
+      }));
+    }
+
+    // 2. Fetch total for current period
+    let totalQuery = `SELECT ${metricExpr} as total FROM transactions WHERE user_id = ? AND date >= ? AND date <= ?`;
+    const totalParams = [userId, from, to];
+    if (category_id) {
+      totalQuery += ' AND category_id = ?';
+      totalParams.push(category_id);
+    }
+    const [curTotalRows] = await pool.query(totalQuery, totalParams);
+    const total = parseFloat(curTotalRows[0]?.total || 0);
+
+    // 3. Fetch total for previous period
+    let prevTotalQuery = `SELECT ${metricExpr} as prev_total FROM transactions WHERE user_id = ? AND date >= ? AND date <= ?`;
+    const prevParams = [userId, prevFrom, prevTo];
+    if (category_id) {
+      prevTotalQuery += ' AND category_id = ?';
+      prevParams.push(category_id);
+    }
+    const [prevTotalRows] = await pool.query(prevTotalQuery, prevParams);
+    const previous_total = parseFloat(prevTotalRows[0]?.prev_total || 0);
+
+    let change_pct = null;
+    if (previous_total > 0) {
+      change_pct = parseFloat((((total - previous_total) / previous_total) * 100).toFixed(2));
+    } else if (previous_total === 0 && total > 0) {
+      change_pct = 100.0;
+    } else if (previous_total === 0 && total === 0) {
+      change_pct = 0.0;
+    }
+
+    res.status(200).json({
+      metric,
+      from,
+      to,
+      granularity,
+      total,
+      previous_total,
+      change_pct,
+      points,
+    });
+  } catch (error) {
+    console.error('Error in getSeriesReport:', error);
+    res.status(500).json({ error: 'Failed to generate time-series report' });
+  }
+};
+
+

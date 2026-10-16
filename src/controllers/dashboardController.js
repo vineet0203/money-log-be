@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { buildPublicUrl } = require('../services/storageService');
 
 exports.getOverview = async (req, res) => {
   try {
@@ -139,7 +140,10 @@ exports.getOverview = async (req, res) => {
         incomeVsExpenses: chartRows.map(r => ({ month: r.month, income: parseFloat(r.income), expenses: parseFloat(r.expenses) })),
         spendingByCategory: categoryRows.map(r => ({ name: r.name, value: parseFloat(r.value), color: r.color || '#3B82F6' }))
       },
-      recentTransactions: recentTransactions,
+      recentTransactions: recentTransactions.map(tx => ({
+        ...tx,
+        receipt_url: buildPublicUrl(req, tx.receipt_url)
+      })),
       budgets: budgetRows.map(r => ({ category: r.category, spent: parseFloat(r.spent), total: parseFloat(r.total), color: r.color || '#3B82F6' })),
       upcomingSubscriptions: {
         count: upcomingSubs.length,

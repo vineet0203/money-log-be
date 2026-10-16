@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { getRelativeKey, deleteFile, buildPublicUrl } = require('../services/storageService');
 
 exports.getProfile = async (req, res) => {
   try {
@@ -11,7 +12,10 @@ exports.getProfile = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(rows[0]);
+    res.json({
+      ...rows[0],
+      profile_image_url: buildPublicUrl(req, rows[0].profile_image_url)
+    });
   } catch (error) {
     console.error('Error fetching user profile:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -21,7 +25,7 @@ exports.getProfile = async (req, res) => {
 exports.updateProfile = async (req, res) => {
   try {
     const { name, email, global_sms_enabled, global_email_enabled, global_push_enabled, timezone } = req.body;
-    let profileImageUrl = req.file ? `/uploads/${req.file.filename}` : undefined;
+    let profileImageUrl = req.file ? getRelativeKey(req, req.file, 'profiles') : undefined;
 
     // Build dynamic update query
     const updates = [];
@@ -64,6 +68,13 @@ exports.updateProfile = async (req, res) => {
     }
 
     if (updates.length > 0) {
+      if (profileImageUrl !== undefined) {
+        const [oldRows] = await pool.query('SELECT profile_image_url FROM users WHERE id = ?', [req.user.id]);
+        if (oldRows.length > 0 && oldRows[0].profile_image_url) {
+          deleteFile(oldRows[0].profile_image_url);
+        }
+      }
+
       values.push(req.user.id);
       await pool.query(
         `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
@@ -77,7 +88,13 @@ exports.updateProfile = async (req, res) => {
       [req.user.id]
     );
 
-    res.json({ message: 'Profile updated successfully', user: rows[0] });
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        ...rows[0],
+        profile_image_url: buildPublicUrl(req, rows[0].profile_image_url)
+      }
+    });
   } catch (error) {
     console.error('Error updating user profile:', error);
     if (error.code === 'ER_DUP_ENTRY') {
