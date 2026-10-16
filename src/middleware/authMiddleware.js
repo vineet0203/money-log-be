@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { pool } = require('../config/db');
 
 const verifyToken = async (req, res, next) => {
   let token = null;
@@ -19,6 +20,12 @@ const verifyToken = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
     
+    // Verify that the user still exists in the database (e.g. after database reset)
+    const [userRows] = await pool.query('SELECT id FROM users WHERE id = ?', [decoded.id]);
+    if (userRows.length === 0) {
+      return res.status(401).json({ error: 'Unauthorized: Account no longer exists' });
+    }
+
     // Attach the user ID to the request object
     req.user = {
       id: decoded.id

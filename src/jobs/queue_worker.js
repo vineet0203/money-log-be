@@ -110,17 +110,10 @@ async function processNotificationQueue() {
           await markJobStatus(job.id, 'sent');
         } 
         else if (job.type === 'push') {
-          // ALWAYS insert an in-app notification so the user sees it in the app's notification center
-          // regardless of whether they have remote push notifications enabled/working
-          await pool.query(
-            `INSERT INTO in_app_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`,
-            [job.user_id, isIncome ? 'Upcoming Income' : 'Upcoming Subscription Payment', messageText, isIncome ? 'info' : 'warning']
-          );
-
           const [tokens] = await pool.query('SELECT push_token FROM user_push_tokens WHERE user_id = ?', [job.user_id]);
 
           if (tokens.length === 0) {
-            console.error(`[Queue Worker] No push tokens found for user ${job.user_id} - In-app notification generated but skipping remote push`);
+            console.log(`[Queue Worker] No push tokens found for user ${job.user_id} - Skipping remote push`);
             await markJobStatus(job.id, 'failed');
             continue;
           }

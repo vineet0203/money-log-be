@@ -27,8 +27,7 @@ const reportsLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
   message: { error: 'Too many analytics/report requests. Please slow down and try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false },
   keyGenerator: (req) => {
     return req.user?.id ? `user_${req.user.id}` : req.ip;
   },

@@ -3,9 +3,14 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-async function createAllTables() {
+async function resetDatabase(options = {}) {
   const dbName = process.env.DB_NAME || 'moneylog';
-  console.log(`Connecting to MySQL database [${dbName}] to create all tables...`);
+  const dropOnly = options.dropOnly || process.argv.includes('--drop-only');
+  const createOnly = options.createOnly || process.argv.includes('--create-only');
+
+  console.log(`\n========================================================`);
+  console.log(`[DB Manager] Target Database: [${dbName}]`);
+  console.log(`========================================================`);
 
   const connection = await mysql.createConnection({
     host: process.env.DB_HOST || 'localhost',
@@ -17,32 +22,55 @@ async function createAllTables() {
   });
 
   try {
-    const schemaPath = path.join(__dirname, '..', 'schema.sql');
-    if (!fs.existsSync(schemaPath)) {
-      throw new Error(`Schema file not found at: ${schemaPath}`);
+    // 1. Drop all tables if not in create-only mode
+    if (!createOnly) {
+      console.log(`\n[1/3] Dropping all existing tables...`);
+      await connection.query('SET FOREIGN_KEY_CHECKS = 0;');
+
+      const [existingRows] = await connection.query('SHOW TABLES;');
+      const existingTables = existingRows.map((row) => Object.values(row)[0]);
+
+      if (existingTables.length === 0) {
+        console.log('  No existing tables found to drop.');
+      } else {
+        console.log(`  Found ${existingTables.length} table(s) to remove.`);
+        for (const table of existingTables) {
+          await connection.query(`DROP TABLE IF EXISTS \`${table}\`;`);
+          console.log(`  ✓ Dropped table: ${table}`);
+        }
+      }
+
+      await connection.query('SET FOREIGN_KEY_CHECKS = 1;');
+
+      if (dropOnly) {
+        console.log(`\n🎉 Success: All tables in [${dbName}] dropped successfully.`);
+        return;
+      }
     }
 
-    console.log(`Reading unified schema from: ${schemaPath}`);
-    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    // 2. Create tables from master schema.sql
+    console.log(`\n[2/3] Applying schema from schema.sql...`);
+    const schemaPath = path.join(__dirname, '..', 'schema.sql');
+    if (!fs.existsSync(schemaPath)) {
+      throw new Error(`Master schema file not found at: ${schemaPath}`);
+    }
 
-    console.log('Executing DDL statements to create all tables (personal finance, account transactions & POS subsystem)...');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
     await connection.query(schemaSql);
 
-    // Verify all created tables
-    const [tables] = await connection.query('SHOW TABLES;');
-    const tableNames = tables.map((r) => Object.values(r)[0]);
+    // 3. Verify created tables
+    const [createdTables] = await connection.query('SHOW TABLES;');
+    const tableNames = createdTables.map((r) => Object.values(r)[0]);
 
-    console.log(`\n✅ Successfully verified ${tableNames.length} tables in database:`);
+    console.log(`\n[3/3] Verification: ${tableNames.length} tables active in [${dbName}]:`);
     tableNames.forEach((t) => console.log(`  ✓ ${t}`));
 
-    // Seed default POS settings & categories for any existing users
+    // 4. Seed default POS settings & categories for any existing users
     try {
       const [users] = await connection.query('SELECT id, name FROM users');
       if (users.length > 0) {
-        console.log(`\nFound ${users.length} registered user(s). Verifying default POS setup...`);
-
+        console.log(`\nFound ${users.length} registered user(s). Verifying starter defaults...`);
         for (const user of users) {
-          // 1. Seed POS Settings if not present
           const [existingSettings] = await connection.query(
             'SELECT id FROM pos_settings WHERE user_id = ?',
             [user.id]
@@ -53,10 +81,8 @@ async function createAllTables() {
                VALUES (?, 'MoneyLog Store', 'Artisan Store & Roastery', 'moneylogpos@okaxis', 8.00, '$', 'USD', '80mm')`,
               [user.id]
             );
-            console.log(`  + Seeded default POS settings for user ${user.id} (${user.name})`);
           }
 
-          // 2. Seed starter categories if not present
           const [existingCats] = await connection.query(
             'SELECT id FROM pos_categories WHERE user_id = ?',
             [user.id]
@@ -74,17 +100,16 @@ async function createAllTables() {
                 [user.id, cat.name, cat.slug, cat.icon]
               );
             }
-            console.log(`  + Seeded default POS categories for user ${user.id}`);
           }
         }
       }
     } catch (seedErr) {
-      console.warn('Notice while checking user POS seed defaults:', seedErr.message);
+      console.warn('Notice while verifying defaults:', seedErr.message);
     }
 
-    console.log(`\n🎉 Database setup complete! All ${tableNames.length} tables created and ready.`);
+    console.log(`\n🎉 Success: Database setup complete! All ${tableNames.length} tables ready.`);
   } catch (error) {
-    console.error('❌ Error creating tables:', error);
+    console.error('\n❌ Database operation failed:', error);
     process.exit(1);
   } finally {
     await connection.end();
@@ -92,7 +117,7 @@ async function createAllTables() {
 }
 
 if (require.main === module) {
-  createAllTables();
+  resetDatabase();
 }
 
-module.exports = { createAllTables };
+module.exports = { resetDatabase };

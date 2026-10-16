@@ -162,10 +162,12 @@ CREATE TABLE `in_app_notifications` (
   `title` VARCHAR(255) NOT NULL,
   `message` TEXT NOT NULL,
   `type` ENUM('warning','success','alert','info') NOT NULL DEFAULT 'info',
+  `link_url` VARCHAR(255) DEFAULT NULL,
   `is_read` TINYINT(1) DEFAULT 0,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_in_app_notif_user` (`user_id`),
+  KEY `idx_user_unread` (`user_id`, `is_read`, `created_at`),
   CONSTRAINT `fk_in_app_notif_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

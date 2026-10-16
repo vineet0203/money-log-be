@@ -4,12 +4,12 @@ const { getRelativeKey, deleteFile, buildPublicUrl } = require('../services/stor
 exports.getProfile = async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, phone_number, name, email, profile_image_url, global_sms_enabled, global_email_enabled, global_push_enabled, timezone FROM users WHERE id = ?',
+      'SELECT id, phone_number, name, email, profile_image_url, global_sms_enabled, global_email_enabled, global_push_enabled, timezone, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(401).json({ error: 'Unauthorized: User not found' });
     }
 
     res.json({
@@ -24,7 +24,7 @@ exports.getProfile = async (req, res) => {
 
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, email, global_sms_enabled, global_email_enabled, global_push_enabled, timezone } = req.body;
+    const { name, email, global_sms_enabled, global_email_enabled, global_push_enabled, timezone, remove_profile_image } = req.body;
     let profileImageUrl = req.file ? getRelativeKey(req, req.file, 'profiles') : undefined;
 
     // Build dynamic update query
@@ -45,6 +45,8 @@ exports.updateProfile = async (req, res) => {
     if (profileImageUrl !== undefined) {
       updates.push('profile_image_url = ?');
       values.push(profileImageUrl);
+    } else if (remove_profile_image === 'true' || remove_profile_image === true) {
+      updates.push('profile_image_url = NULL');
     }
 
     if (global_sms_enabled !== undefined) {
@@ -68,7 +70,7 @@ exports.updateProfile = async (req, res) => {
     }
 
     if (updates.length > 0) {
-      if (profileImageUrl !== undefined) {
+      if (profileImageUrl !== undefined || remove_profile_image === 'true' || remove_profile_image === true) {
         const [oldRows] = await pool.query('SELECT profile_image_url FROM users WHERE id = ?', [req.user.id]);
         if (oldRows.length > 0 && oldRows[0].profile_image_url) {
           deleteFile(oldRows[0].profile_image_url);
@@ -84,7 +86,7 @@ exports.updateProfile = async (req, res) => {
 
     // Fetch updated user
     const [rows] = await pool.query(
-      'SELECT id, phone_number, name, email, profile_image_url, global_sms_enabled, global_email_enabled, global_push_enabled, timezone FROM users WHERE id = ?',
+      'SELECT id, phone_number, name, email, profile_image_url, global_sms_enabled, global_email_enabled, global_push_enabled, timezone, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
 
