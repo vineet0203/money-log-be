@@ -85,6 +85,7 @@ exports.getSubscriptions = async (req, res) => {
              c.color as category_color,
              DATEDIFF(s.next_billing_date, CURDATE()) as days_left,
              (SELECT COUNT(*) FROM recurring_occurrences ro WHERE ro.recurring_id = s.id AND ro.status = 'missed') as missed_count,
+             (SELECT MAX(t.date) FROM transactions t WHERE t.subscription_id = s.id) as last_paid_date,
              CASE 
                 WHEN s.status = 'cancelled' OR s.status = 'paused' THEN 'Inactive'
                 WHEN DATEDIFF(s.next_billing_date, CURDATE()) <= 7 THEN 'Upcoming'
@@ -402,7 +403,8 @@ exports.getSubscriptionDetails = async (req, res) => {
              c.name as category_name, 
              c.icon_name as category_icon, 
              c.color as category_color,
-             (SELECT COUNT(*) FROM recurring_occurrences ro WHERE ro.recurring_id = s.id AND ro.status = 'missed') as missed_count
+             (SELECT COUNT(*) FROM recurring_occurrences ro WHERE ro.recurring_id = s.id AND ro.status = 'missed') as missed_count,
+             (SELECT MAX(t.date) FROM transactions t WHERE t.subscription_id = s.id) as last_paid_date
       FROM subscriptions s
       LEFT JOIN categories c ON s.category_id = c.id
       WHERE s.id = ? AND s.user_id = ?
@@ -482,14 +484,18 @@ exports.getOccurrences = async (req, res) => {
     const [countRows] = await pool.query(`SELECT COUNT(*) as total FROM recurring_occurrences ro WHERE ${where}`, params);
     const total = countRows[0]?.total || 0;
 
+    const sortDirection = req.query.sort?.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
     const [rows] = await pool.query(`
       SELECT ro.*, 
              t.title as transaction_title,
+             t.description as transaction_description,
+             t.date as transaction_date,
              t.receipt_url as transaction_receipt_url
       FROM recurring_occurrences ro
       LEFT JOIN transactions t ON ro.transaction_id = t.id
       WHERE ${where}
-      ORDER BY ro.due_date DESC, ro.id DESC
+      ORDER BY ro.due_date ${sortDirection}, ro.id ${sortDirection}
       LIMIT ? OFFSET ?
     `, [...params, limit, offset]);
 
@@ -547,8 +553,56 @@ exports.payOccurrence = async (req, res) => {
     }
 
     const payAmount = amount !== undefined && !isNaN(parseFloat(amount)) ? parseFloat(amount) : parseFloat(occ.amount);
-    const payDate = date || occ.due_date;
-    const payCatId = category_id !== undefined ? category_id : sub.category_id;
+    const payDate = date || toDateString(new Date());
+    const payCatId = (category_id !== undefined && category_id !== null) ? category_id : sub.category_id;
+
+    // Build intelligent description showing previous skip history and late days
+    const wasSkipped = occ.status === 'skipped' || Boolean(occ.skipped_at);
+
+    const formatDatePretty = (dVal) => {
+      if (!dVal) return '';
+      try {
+        const dStr = toDateString(dVal);
+        const [y, m, d] = dStr.split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      } catch {
+        return String(dVal);
+      }
+    };
+
+    const formattedDueDate = formatDatePretty(occ.due_date);
+    const formattedPayDate = formatDatePretty(payDate);
+
+    // Calculate difference between payDate and due_date in days
+    const dueTime = new Date(toDateString(occ.due_date)).getTime();
+    const payTime = new Date(toDateString(payDate)).getTime();
+    const diffDays = Math.round((payTime - dueTime) / (1000 * 60 * 60 * 24));
+
+    let defaultDescription = '';
+    if (wasSkipped) {
+      const skippedDate = occ.skipped_at || occ.updated_at || new Date();
+      const formattedSkippedDate = formatDatePretty(skippedDate);
+
+      let lateText = '';
+      if (diffDays > 0) {
+        lateText = ` (${diffDays} day${diffDays > 1 ? 's' : ''} late)`;
+      } else if (diffDays === 0) {
+        lateText = ` (on scheduled due date)`;
+      } else {
+        const earlyDays = Math.abs(diffDays);
+        lateText = ` (${earlyDays} day${earlyDays > 1 ? 's' : ''} early)`;
+      }
+
+      defaultDescription = `Originally skipped on ${formattedSkippedDate} • Paid on ${formattedPayDate}${lateText} for scheduled due date ${formattedDueDate}`;
+    } else {
+      let lateText = '';
+      if (diffDays > 0) {
+        lateText = ` (${diffDays} day${diffDays > 1 ? 's' : ''} late)`;
+      }
+      defaultDescription = `Payment for recurring occurrence on ${formattedDueDate}${lateText}`;
+    }
+
+    const txDescription = notes || defaultDescription;
 
     // Create linked transaction
     const [txResult] = await connection.query(`
@@ -563,7 +617,7 @@ exports.payOccurrence = async (req, res) => {
       sub.type || 'expense',
       payDate,
       payCatId,
-      notes || `Payment for recurring occurrence on ${occ.due_date}`
+      txDescription
     ]);
 
     const txId = txResult.insertId;
@@ -588,6 +642,20 @@ exports.payOccurrence = async (req, res) => {
         sub.id,
         userId
       ]);
+    } else {
+      await materializeOccurrencesForSubscription(sub, 90, 3, connection);
+      const [newEarliest] = await connection.query(`
+        SELECT due_date FROM recurring_occurrences
+        WHERE recurring_id = ? AND status IN ('due', 'missed')
+        ORDER BY due_date ASC LIMIT 1
+      `, [sub.id]);
+      if (newEarliest.length > 0) {
+        await connection.query('UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?', [
+          toDateString(newEarliest[0].due_date),
+          sub.id,
+          userId
+        ]);
+      }
     }
 
     await connection.commit();
@@ -621,7 +689,7 @@ exports.skipOccurrence = async (req, res) => {
   try {
     const [result] = await pool.query(`
       UPDATE recurring_occurrences
-      SET status = 'skipped'
+      SET status = 'skipped', skipped_at = NOW()
       WHERE id = ? AND recurring_id = ? AND user_id = ? AND status IN ('due', 'missed')
     `, [occId, id, userId]);
 
@@ -642,12 +710,83 @@ exports.skipOccurrence = async (req, res) => {
         id,
         userId
       ]);
+    } else {
+      const [subRows] = await pool.query('SELECT * FROM subscriptions WHERE id = ? AND user_id = ?', [id, userId]);
+      if (subRows.length > 0) {
+        await materializeOccurrencesForSubscription(subRows[0], 90, 3, pool);
+        const [newEarliest] = await pool.query(`
+          SELECT due_date FROM recurring_occurrences
+          WHERE recurring_id = ? AND status IN ('due', 'missed')
+          ORDER BY due_date ASC LIMIT 1
+        `, [id]);
+        if (newEarliest.length > 0) {
+          await pool.query('UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?', [
+            toDateString(newEarliest[0].due_date),
+            id,
+            userId
+          ]);
+        }
+      }
     }
+
+    // Dismiss unread in-app reminder notifications for this subscription
+    await pool.query(`
+      DELETE FROM in_app_notifications 
+      WHERE user_id = ? AND link_url = ? AND is_read = FALSE
+    `, [userId, `/subscriptions/${id}`]);
+
+    // Cancel pending outbound notification alerts (Push, Email, SMS) for this subscription
+    await pool.query(`
+      UPDATE notification_queue 
+      SET status = 'failed' 
+      WHERE subscription_id = ? AND user_id = ? AND status = 'pending'
+    `, [id, userId]);
 
     res.status(200).json({ success: true, message: 'Occurrence skipped' });
   } catch (error) {
     console.error('Error skipping occurrence:', error);
     res.status(500).json({ error: 'Failed to skip occurrence' });
+  }
+};
+
+/**
+ * Unskip Occurrence API
+ * POST /api/subscriptions/:id/occurrences/:occId/unskip
+ */
+exports.unskipOccurrence = async (req, res) => {
+  const { id, occId } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const [result] = await pool.query(`
+      UPDATE recurring_occurrences
+      SET status = 'due', skipped_at = NULL
+      WHERE id = ? AND recurring_id = ? AND user_id = ? AND status = 'skipped'
+    `, [occId, id, userId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Occurrence not found, unauthorized, or not currently skipped' });
+    }
+
+    // Resync next_billing_date to earliest due/missed
+    const [earliestRows] = await pool.query(`
+      SELECT due_date FROM recurring_occurrences
+      WHERE recurring_id = ? AND status IN ('due', 'missed')
+      ORDER BY due_date ASC LIMIT 1
+    `, [id]);
+
+    if (earliestRows.length > 0) {
+      await pool.query('UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?', [
+        toDateString(earliestRows[0].due_date),
+        id,
+        userId
+      ]);
+    }
+
+    res.status(200).json({ success: true, message: 'Occurrence unskipped successfully' });
+  } catch (error) {
+    console.error('Error unskipping occurrence:', error);
+    res.status(500).json({ error: 'Failed to unskip occurrence' });
   }
 };
 

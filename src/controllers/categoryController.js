@@ -14,7 +14,7 @@ exports.getCategories = async (req, res) => {
         AND t.date < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
       WHERE c.user_id = ?
       GROUP BY c.id
-      ORDER BY c.created_at ASC
+      ORDER BY spent_this_month DESC, c.budget_limit DESC, c.id ASC
     `, [req.user.id]);
     
     res.status(200).json(rows);

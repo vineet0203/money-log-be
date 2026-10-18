@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { deleteFile, getRelativeKey, buildPublicUrl } = require('../services/storageService');
+const recurringService = require('../services/recurringService');
 
 /**
  * Calculate next billing date with month-clamping
@@ -318,7 +319,7 @@ exports.getTransactions = async (req, res) => {
 };
 
 exports.createTransaction = async (req, res) => {
-  const { title, amount, type, date, category_id, description, subscription_id } = req.body;
+  const { title, amount, type, date, category_id, description, subscription_id, occurrence_id } = req.body;
   const receipt_url = req.file ? getRelativeKey(req, req.file, 'receipts') : null;
 
   if (!title || !amount || !type || !date) {
@@ -329,8 +330,8 @@ exports.createTransaction = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    let newNextBillingDate = null;
     let subToUpdate = null;
+    let targetOcc = null;
 
     if (subscription_id) {
       const [existingSubs] = await connection.query(
@@ -344,24 +345,47 @@ exports.createTransaction = async (req, res) => {
       }
 
       subToUpdate = existingSubs[0];
-      
-      const today = new Date();
-      const nextBillingDate = new Date(subToUpdate.next_billing_date);
-      const diffTime = nextBillingDate.getTime() - today.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      const maxDays = subToUpdate.billing_cycle === 'yearly' ? 30 : 15;
-      
-      if (diffDays > maxDays) {
-        await connection.rollback();
-        const actionText = subToUpdate.type === 'income' ? 'accept payment' : 'pay';
-        return res.status(400).json({ error: `Too early! You can only ${actionText} up to ${maxDays} days before the due date.` });
+
+      if (occurrence_id) {
+        // Specific occurrence targeted
+        const [occs] = await connection.query(
+          'SELECT * FROM recurring_occurrences WHERE id = ? AND recurring_id = ? AND user_id = ? FOR UPDATE',
+          [occurrence_id, subscription_id, req.user.id]
+        );
+        if (occs.length === 0) {
+          await connection.rollback();
+          return res.status(404).json({ error: 'Occurrence not found or unauthorized' });
+        }
+        targetOcc = occs[0];
+        if (targetOcc.status === 'paid') {
+          await connection.rollback();
+          return res.status(400).json({ error: 'This occurrence has already been paid' });
+        }
+      } else {
+        // No occurrence_id passed: check early payment window against next_billing_date
+        const today = new Date();
+        const nextBillingDate = new Date(subToUpdate.next_billing_date);
+        const diffTime = nextBillingDate.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const maxDays = subToUpdate.billing_cycle === 'yearly' ? 30 : 15;
+        
+        if (diffDays > maxDays) {
+          await connection.rollback();
+          const actionText = subToUpdate.type === 'income' ? 'accept payment' : 'pay';
+          return res.status(400).json({ error: `Too early! You can only ${actionText} up to ${maxDays} days before the due date.` });
+        }
+
+        const subDateStr = recurringService.toDateString(subToUpdate.next_billing_date);
+        const [matchingOccs] = await connection.query(
+          `SELECT * FROM recurring_occurrences 
+           WHERE recurring_id = ? AND user_id = ? AND due_date = ? AND status IN ('due', 'missed') 
+           LIMIT 1 FOR UPDATE`,
+          [subscription_id, req.user.id, subDateStr]
+        );
+        if (matchingOccs.length > 0) {
+          targetOcc = matchingOccs[0];
+        }
       }
-
-      const dateStr = subToUpdate.next_billing_date instanceof Date
-        ? subToUpdate.next_billing_date.toISOString().split('T')[0]
-        : String(subToUpdate.next_billing_date).split('T')[0];
-
-      newNextBillingDate = calculateNextBillingDate(dateStr, subToUpdate.billing_cycle);
     }
 
     // Insert Transaction
@@ -374,11 +398,63 @@ exports.createTransaction = async (req, res) => {
 
     const transactionId = result.insertId;
 
-    // Advance the billing date if linked to subscription
-    if (subToUpdate && newNextBillingDate) {
+    if (subToUpdate) {
+      if (targetOcc) {
+        // Mark occurrence paid
+        await connection.query(
+          `UPDATE recurring_occurrences 
+           SET status = 'paid', amount = ?, transaction_id = ?, paid_at = NOW() 
+           WHERE id = ? AND user_id = ?`,
+          [amount, transactionId, targetOcc.id, req.user.id]
+        );
+      }
+
+      // Resync next_billing_date
+      const [earliestRows] = await connection.query(
+        `SELECT due_date FROM recurring_occurrences
+         WHERE recurring_id = ? AND status IN ('due', 'missed')
+         ORDER BY due_date ASC LIMIT 1`,
+        [subscription_id]
+      );
+
+      if (earliestRows.length > 0) {
+        await connection.query(
+          'UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?',
+          [recurringService.toDateString(earliestRows[0].due_date), subscription_id, req.user.id]
+        );
+      } else {
+        await recurringService.materializeOccurrencesForSubscription(subToUpdate, 90, 3, connection);
+        const [newEarliest] = await connection.query(
+          `SELECT due_date FROM recurring_occurrences
+           WHERE recurring_id = ? AND status IN ('due', 'missed')
+           ORDER BY due_date ASC LIMIT 1`,
+          [subscription_id]
+        );
+        if (newEarliest.length > 0) {
+          await connection.query(
+            'UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?',
+            [recurringService.toDateString(newEarliest[0].due_date), subscription_id, req.user.id]
+          );
+        } else {
+          const legacyNext = calculateNextBillingDate(
+            recurringService.toDateString(subToUpdate.next_billing_date),
+            subToUpdate.billing_cycle
+          );
+          await connection.query(
+            'UPDATE subscriptions SET next_billing_date = ? WHERE id = ? AND user_id = ?',
+            [legacyNext, subscription_id, req.user.id]
+          );
+        }
+      }
+
+      // Clear notifications
       await connection.query(
-        'UPDATE subscriptions SET next_billing_date = ? WHERE id = ?',
-        [newNextBillingDate, subscription_id]
+        'DELETE FROM in_app_notifications WHERE user_id = ? AND link_url = ? AND is_read = FALSE',
+        [req.user.id, `/subscriptions/${subscription_id}`]
+      );
+      await connection.query(
+        'UPDATE notification_queue SET status = "failed" WHERE subscription_id = ? AND user_id = ? AND status = "pending"',
+        [subscription_id, req.user.id]
       );
     }
 

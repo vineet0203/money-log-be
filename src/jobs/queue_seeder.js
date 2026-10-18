@@ -61,6 +61,17 @@ async function seedNotificationQueue() {
         continue; // Already processed today
       }
 
+      // Check if occurrence for this date is skipped or paid
+      const [occRows] = await pool.query(
+        `SELECT id, status FROM recurring_occurrences 
+         WHERE recurring_id = ? AND due_date = ?`,
+        [sub.id, dbDateStr]
+      );
+      if (occRows.length > 0 && (occRows[0].status === 'skipped' || occRows[0].status === 'paid')) {
+        console.log(`[Queue Seeder] Skipping notification for subscription ${sub.id} - Occurrence on ${dbDateStr} is ${occRows[0].status}.`);
+        continue;
+      }
+
       // 5. ALWAYS create an in-app system notification (Always enabled, records to DB)
       const isIncome = sub.type === 'income';
       const formattedAmount = `$${parseFloat(sub.amount || 0).toFixed(2)}`;

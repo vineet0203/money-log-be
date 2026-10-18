@@ -68,6 +68,18 @@ async function processNotificationQueue() {
         continue;
       }
 
+      // If occurrence on this date is skipped or paid, cancel the job
+      const [occCheck] = await pool.query(
+        `SELECT id, status FROM recurring_occurrences 
+         WHERE recurring_id = ? AND due_date = ?`,
+        [job.subscription_id, dbDateStr]
+      );
+      if (occCheck.length > 0 && (occCheck[0].status === 'skipped' || occCheck[0].status === 'paid')) {
+        console.log(`[Queue Worker] Cancelling job ${job.id} - Occurrence on ${dbDateStr} is ${occCheck[0].status}.`);
+        await markJobStatus(job.id, 'failed');
+        continue;
+      }
+
       const isIncome = job.sub_type === 'income';
       const verb = isIncome ? 'expected income' : 'subscription';
       const action = isIncome ? 'expected' : 'due';

@@ -117,6 +117,7 @@ CREATE TABLE `recurring_occurrences` (
   `status` ENUM('due', 'paid', 'skipped', 'missed', 'cancelled') NOT NULL DEFAULT 'due',
   `transaction_id` INT DEFAULT NULL,
   `paid_at` TIMESTAMP NULL DEFAULT NULL,
+  `skipped_at` TIMESTAMP NULL DEFAULT NULL,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

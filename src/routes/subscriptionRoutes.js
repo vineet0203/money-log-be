@@ -15,6 +15,7 @@ router.post('/', subscriptionController.addSubscription);
 router.get('/:id/occurrences', subscriptionController.getOccurrences);
 router.post('/:id/occurrences/:occId/pay', subscriptionController.payOccurrence);
 router.post('/:id/occurrences/:occId/skip', subscriptionController.skipOccurrence);
+router.post('/:id/occurrences/:occId/unskip', subscriptionController.unskipOccurrence);
 router.put('/:id', subscriptionController.updateSubscription);
 router.delete('/:id', subscriptionController.deleteSubscription);
 router.get('/:id/details', subscriptionController.getSubscriptionDetails);

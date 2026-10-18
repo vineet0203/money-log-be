@@ -168,15 +168,14 @@ exports.getOverview = async (req, res) => {
     // 5. Charts: Spending By Category (Current Month)
     const [categoryRows] = await pool.query(
       `SELECT 
-        c.name as name, 
+        COALESCE(c.name, 'Uncategorized') as name, 
         SUM(t.amount) as value, 
-        c.color 
+        COALESCE(c.color, '#94A3B8') as color 
        FROM transactions t
-       JOIN categories c ON t.category_id = c.id
+       LEFT JOIN categories c ON t.category_id = c.id
        WHERE t.user_id = ? AND t.type = 'expense' AND MONTH(t.date) = MONTH(CURDATE()) AND YEAR(t.date) = YEAR(CURDATE())
        GROUP BY c.id, c.name, c.color
-       ORDER BY value DESC
-       LIMIT 6`,
+       ORDER BY value DESC`,
       [userId]
     );
 
@@ -193,9 +192,18 @@ exports.getOverview = async (req, res) => {
 
     // 7. Upcoming Subscriptions (Next 7 Days with detail items)
     const [upcomingSubs] = await pool.query(
-      `SELECT * FROM subscriptions 
-       WHERE user_id = ? AND status = 'active' AND next_billing_date >= CURDATE() AND next_billing_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
-       ORDER BY next_billing_date ASC`,
+      `SELECT s.* FROM subscriptions s
+       WHERE s.user_id = ? 
+         AND s.status = 'active' 
+         AND s.next_billing_date >= CURDATE() 
+         AND s.next_billing_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+         AND NOT EXISTS (
+           SELECT 1 FROM recurring_occurrences ro 
+           WHERE ro.recurring_id = s.id 
+             AND ro.due_date = s.next_billing_date 
+             AND ro.status IN ('skipped', 'paid')
+         )
+       ORDER BY s.next_billing_date ASC`,
       [userId]
     );
 
@@ -215,8 +223,7 @@ exports.getOverview = async (req, res) => {
        WHERE c.user_id = ? OR (t.id IS NOT NULL)
        GROUP BY c.id, c.name, c.color, c.budget_limit
        HAVING spent > 0 OR total > 0
-       ORDER BY spent DESC
-       LIMIT 6`,
+       ORDER BY spent DESC, total DESC, c.name ASC`,
       [userId, userId]
     );
 

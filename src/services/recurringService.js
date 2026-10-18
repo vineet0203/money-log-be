@@ -179,9 +179,11 @@ async function materializeOccurrencesForSubscription(subscription, horizonDays =
   const endDate = endMode === 'on_date' && subscription.end_date ? toDateString(subscription.end_date) : null;
   const totalAllowed = endMode === 'after_n' && subscription.occurrences_total ? subscription.occurrences_total : Infinity;
 
-  // Count existing future occurrences (due_date >= today)
+  // Count existing future pending occurrences (due_date >= today and status in ('due', 'missed'))
   const todayStr = today.toISOString().split('T')[0];
-  const existingFutureCount = existingRows.filter(r => toDateString(r.due_date) >= todayStr).length;
+  const existingFuturePendingCount = existingRows.filter(
+    r => toDateString(r.due_date) >= todayStr && (r.status === 'due' || r.status === 'missed')
+  ).length;
 
   let currentDate = '';
   if (lastExistingDate) {
@@ -195,7 +197,7 @@ async function materializeOccurrencesForSubscription(subscription, horizonDays =
   let currentTotalCount = existingTotalCount;
 
   while (
-    (currentDate <= horizonDate || (existingFutureCount + toInsert.length) < minOccurrences) &&
+    (currentDate <= horizonDate || (existingFuturePendingCount + toInsert.length) < minOccurrences) &&
     currentTotalCount < totalAllowed
   ) {
     if (endDate && currentDate > endDate) {
@@ -235,8 +237,8 @@ async function materializeOccurrencesForSubscription(subscription, horizonDays =
   );
 
   const latestDate = allOccs.length > 0 ? toDateString(allOccs[allOccs.length - 1].due_date) : null;
-  const earliestDue = allOccs.find(o => o.status === 'due');
-  const nextBilling = earliestDue ? toDateString(earliestDue.due_date) : (latestDate || subscription.next_billing_date);
+  const earliestPending = allOccs.find(o => o.status === 'due' || o.status === 'missed');
+  const nextBilling = earliestPending ? toDateString(earliestPending.due_date) : null;
 
   await db.query(
     'UPDATE subscriptions SET generated_through = ?, next_billing_date = ? WHERE id = ?',
