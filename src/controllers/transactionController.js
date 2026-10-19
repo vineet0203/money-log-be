@@ -44,7 +44,7 @@ const formatTransactionRow = (req, tx) => {
 /**
  * Compute aggregate stats for a specific date window & filters
  */
-const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterType, filterCategoryId, filterSearch, filterReceipt) => {
+const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterType, filterCategoryId, filterSearch, filterReceipt, filterRecurring) => {
   let query = `SELECT 
       SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE 0 END) as income,
       SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END) as expense,
@@ -81,6 +81,11 @@ const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterTy
   }
   if (filterReceipt === 'true' || filterReceipt === true) {
     query += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
+  }
+  if (filterRecurring === 'true' || filterRecurring === true) {
+    query += ' AND t.subscription_id IS NOT NULL';
+  } else if (filterRecurring === 'false' || filterRecurring === false) {
+    query += ' AND t.subscription_id IS NULL';
   }
 
   const [rows] = await pool.query(query, params);
@@ -133,6 +138,11 @@ const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterTy
     if (filterReceipt === 'true' || filterReceipt === true) {
       orderQuery += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
     }
+    if (filterRecurring === 'true' || filterRecurring === true) {
+      orderQuery += ' AND t.subscription_id IS NOT NULL';
+    } else if (filterRecurring === 'false' || filterRecurring === false) {
+      orderQuery += ' AND t.subscription_id IS NULL';
+    }
 
     const [maxRows] = await pool.query(`${orderQuery} ORDER BY t.amount DESC, t.id DESC LIMIT 1`, orderParams);
     const [minRows] = await pool.query(`${orderQuery} ORDER BY t.amount ASC, t.id ASC LIMIT 1`, orderParams);
@@ -177,7 +187,7 @@ const computeTransactionStatsForWindow = async (userId, winFrom, winTo, filterTy
 
 exports.getStats = async (req, res) => {
   try {
-    const { fromDate, toDate, from, to, type, category_id, search, has_receipt, compare } = req.query;
+    const { fromDate, toDate, from, to, type, category_id, search, has_receipt, is_recurring, compare } = req.query;
     const effectiveFrom = fromDate || from;
     const effectiveTo = toDate || to;
 
@@ -188,7 +198,8 @@ exports.getStats = async (req, res) => {
       type,
       category_id,
       search,
-      has_receipt
+      has_receipt,
+      is_recurring
     );
 
     let previous = null;
@@ -213,7 +224,8 @@ exports.getStats = async (req, res) => {
         type,
         category_id,
         search,
-        has_receipt
+        has_receipt,
+        is_recurring
       );
 
       // §3A.1 & §3A.4: If no preceding data, return null rather than zeros
@@ -252,7 +264,7 @@ exports.getTransactions = async (req, res) => {
     const requestedLimit = parseInt(req.query.limit, 10) || 20;
     const limit = Math.min(Math.max(1, requestedLimit), 100);
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-    const { type, fromDate, toDate, category_id, search, has_receipt } = req.query;
+    const { type, fromDate, toDate, category_id, search, has_receipt, is_recurring } = req.query;
 
     let query = `SELECT t.*, c.name as category_name 
                  FROM transactions t
@@ -296,6 +308,13 @@ exports.getTransactions = async (req, res) => {
     if (has_receipt === 'true' || has_receipt === true) {
       query += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
       countQuery += ' AND t.receipt_url IS NOT NULL AND t.receipt_url != ""';
+    }
+    if (is_recurring === 'true' || is_recurring === true) {
+      query += ' AND t.subscription_id IS NOT NULL';
+      countQuery += ' AND t.subscription_id IS NOT NULL';
+    } else if (is_recurring === 'false' || is_recurring === false) {
+      query += ' AND t.subscription_id IS NULL';
+      countQuery += ' AND t.subscription_id IS NULL';
     }
 
     query += ' ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?';

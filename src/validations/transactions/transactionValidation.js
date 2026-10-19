@@ -61,6 +61,7 @@ const listTransactionsQuerySchema = z.object({
     category_id: z.coerce.number().positive().optional(),
     search: z.string().max(100).optional(),
     has_receipt: z.union([z.boolean(), z.enum(['true', 'false'])]).optional(),
+    is_recurring: z.union([z.boolean(), z.enum(['true', 'false'])]).optional(),
     limit: z.coerce.number().min(1).max(100).optional(),
     offset: z.coerce.number().min(0).optional(),
     page: z.coerce.number().min(1).optional(),

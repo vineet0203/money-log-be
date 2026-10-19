@@ -5,18 +5,20 @@ exports.getOverview = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 1. Total Balance (retained for backward compatibility / account ledgers)
+    // 1. Total Balance calculated directly from transactions (All-Time Income - All-Time Expense)
     const [[balanceRows]] = await pool.query(
       `SELECT 
-        SUM(CASE WHEN type = 'bank' THEN balance ELSE 0 END) as cash,
-        SUM(CASE WHEN type = 'card' THEN balance ELSE 0 END) as creditDebt
-       FROM accounts WHERE user_id = ?`,
+        COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as totalBalance,
+        COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as allTimeIncome,
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as allTimeExpense
+       FROM transactions WHERE user_id = ?`,
       [userId]
     );
 
-    const cash = parseFloat(balanceRows?.cash || 0);
-    const creditDebt = parseFloat(balanceRows?.creditDebt || 0);
-    const totalBalance = cash - creditDebt;
+    const totalBalance = parseFloat(balanceRows?.totalBalance || 0);
+    const cash = parseFloat(balanceRows?.allTimeIncome || 0);
+    const creditDebt = parseFloat(balanceRows?.allTimeExpense || 0);
 
     // 2. Today, This Week, This Month, Previous Month & Year Stats
     const [[statsRows]] = await pool.query(
