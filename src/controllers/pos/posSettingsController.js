@@ -15,6 +15,22 @@ function parseJson(val, fallback = null) {
   }
 }
 
+let hasCheckedCashierColumn = false;
+async function ensureCashierNameColumn() {
+  if (hasCheckedCashierColumn) return;
+  try {
+    const [cols] = await pool.query(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pos_settings' AND COLUMN_NAME = 'cashier_name'"
+    );
+    if (cols.length === 0) {
+      await pool.query("ALTER TABLE pos_settings ADD COLUMN cashier_name VARCHAR(150) DEFAULT NULL AFTER show_cashier_name");
+    }
+    hasCheckedCashierColumn = true;
+  } catch (err) {
+    console.warn('Could not check or add cashier_name column:', err.message);
+  }
+}
+
 /**
  * Maps DB row to frontend camelCase settings object
  */
@@ -76,6 +92,7 @@ function formatSettingsResponse(row) {
     paperSize: row.paper_width || '80mm',
     showTaxBreakdown: row.show_tax_breakdown !== undefined ? Boolean(row.show_tax_breakdown) : true,
     showCashierName: row.show_cashier_name !== undefined ? Boolean(row.show_cashier_name) : true,
+    cashierName: row.cashier_name || '',
     showCustomerInfo: row.show_customer_info !== undefined ? Boolean(row.show_customer_info) : true,
     showUpiQrOnReceipt: row.show_upi_qr_on_receipt !== undefined ? Boolean(row.show_upi_qr_on_receipt) : true,
     autoPrintReceipt: Boolean(row.auto_print_receipt),
@@ -92,6 +109,7 @@ exports.getSettings = async (req, res) => {
   const userId = req.user.id;
 
   try {
+    await ensureCashierNameColumn();
     const [rows] = await pool.query(
       'SELECT * FROM pos_settings WHERE user_id = ? LIMIT 1',
       [userId]
@@ -131,6 +149,7 @@ exports.updateSettings = async (req, res) => {
   const userId = req.user.id;
 
   try {
+    await ensureCashierNameColumn();
     const validated = updatePosSettingsSchema.parse(req.body);
 
     // Compute combined default tax rate from taxes array
@@ -322,6 +341,10 @@ exports.updateSettings = async (req, res) => {
       if (validated.showCashierName !== undefined) {
         fields.push('`show_cashier_name` = ?');
         values.push(validated.showCashierName ? 1 : 0);
+      }
+      if (validated.cashierName !== undefined) {
+        fields.push('`cashier_name` = ?');
+        values.push(validated.cashierName || null);
       }
       if (validated.showCustomerInfo !== undefined) {
         fields.push('`show_customer_info` = ?');

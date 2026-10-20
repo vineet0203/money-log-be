@@ -25,6 +25,22 @@ async function generateOrderNumber(connection, userId) {
   return orderNumber;
 }
 
+let hasCheckedOrderCashierColumn = false;
+async function ensureOrderCashierNameColumn() {
+  if (hasCheckedOrderCashierColumn) return;
+  try {
+    const [cols] = await pool.query(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pos_order_receipt_configs' AND COLUMN_NAME = 'cashier_name'"
+    );
+    if (cols.length === 0) {
+      await pool.query("ALTER TABLE pos_order_receipt_configs ADD COLUMN cashier_name VARCHAR(150) DEFAULT NULL AFTER show_cashier_name");
+    }
+    hasCheckedOrderCashierColumn = true;
+  } catch (err) {
+    console.warn('Could not check or add cashier_name column to pos_order_receipt_configs:', err.message);
+  }
+}
+
 /**
  * Format receipt config snapshot from DB row
  */
@@ -51,6 +67,7 @@ function formatReceiptConfig(row) {
     paperSize: row.paper_width || '80mm',
     showTaxBreakdown: Boolean(row.show_tax_breakdown),
     showCashierName: Boolean(row.show_cashier_name),
+    cashierName: row.cashier_name || '',
     showCustomerInfo: Boolean(row.show_customer_info),
     showUpiQrOnReceipt: Boolean(row.show_upi_qr_on_receipt),
     upiId: row.upi_id,
@@ -160,6 +177,7 @@ exports.createOrder = async (req, res) => {
     );
 
     // 4. Save frozen receipt configuration snapshot in pos_order_receipt_configs
+    await ensureOrderCashierNameColumn();
     const [settingsRows] = await connection.query(
       'SELECT * FROM pos_settings WHERE user_id = ?',
       [userId]
@@ -189,6 +207,7 @@ exports.createOrder = async (req, res) => {
       paper_width: reqCfg.paperSize || curSettings.paper_width || '80mm',
       show_tax_breakdown: reqCfg.showTaxBreakdown !== undefined ? (reqCfg.showTaxBreakdown ? 1 : 0) : (curSettings.show_tax_breakdown ?? 1),
       show_cashier_name: reqCfg.showCashierName !== undefined ? (reqCfg.showCashierName ? 1 : 0) : (curSettings.show_cashier_name ?? 1),
+      cashier_name: reqCfg.cashierName !== undefined ? reqCfg.cashierName : (curSettings.cashier_name || null),
       show_customer_info: reqCfg.showCustomerInfo !== undefined ? (reqCfg.showCustomerInfo ? 1 : 0) : (curSettings.show_customer_info ?? 1),
       show_upi_qr_on_receipt: reqCfg.showUpiQrOnReceipt !== undefined ? (reqCfg.showUpiQrOnReceipt ? 1 : 0) : (curSettings.show_upi_qr_on_receipt ?? 1),
       upi_id: reqCfg.upiId !== undefined ? reqCfg.upiId : curSettings.upi_id,
@@ -203,10 +222,10 @@ exports.createOrder = async (req, res) => {
         order_id, store_name, store_logo_url, store_logo_initial, store_tagline,
         store_phone, store_email, address_line1, address_line2, city, state, postal_code,
         tax_number, receipt_header_note, receipt_footer_note, return_policy, return_window_days,
-        currency_symbol, paper_width, show_tax_breakdown, show_cashier_name,
+        currency_symbol, paper_width, show_tax_breakdown, show_cashier_name, cashier_name,
         show_customer_info, show_upi_qr_on_receipt, upi_id, upi_payee_name,
         upi_qr_type, upi_qr_image_url, taxes_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         orderId,
         configSnapshot.store_name,
@@ -229,6 +248,7 @@ exports.createOrder = async (req, res) => {
         configSnapshot.paper_width,
         configSnapshot.show_tax_breakdown,
         configSnapshot.show_cashier_name,
+        configSnapshot.cashier_name,
         configSnapshot.show_customer_info,
         configSnapshot.show_upi_qr_on_receipt,
         configSnapshot.upi_id,

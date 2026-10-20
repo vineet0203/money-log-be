@@ -38,6 +38,7 @@ const updatePosSettingsSchema = z.object({
   paperSize: z.string().trim().max(20).optional(),
   showTaxBreakdown: z.boolean().optional(),
   showCashierName: z.boolean().optional(),
+  cashierName: z.string().trim().max(150).nullable().optional(),
   showCustomerInfo: z.boolean().optional(),
   showUpiQrOnReceipt: z.boolean().optional(),
   autoPrintReceipt: z.boolean().optional(),

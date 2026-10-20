@@ -612,7 +612,7 @@ exports.payOccurrence = async (req, res) => {
       userId,
       sub.id,
       sub.name,
-      'Recurring payment',
+      'Subscription',
       payAmount,
       sub.type || 'expense',
       payDate,

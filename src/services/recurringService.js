@@ -305,7 +305,7 @@ async function processRecurringJob() {
                 sub.user_id,
                 sub.id,
                 sub.name,
-                'Recurring auto-post',
+                'Subscription auto-post',
                 occ.amount,
                 sub.type || 'expense',
                 occ.due_date,

@@ -579,7 +579,7 @@ exports.updateTransaction = async (req, res) => {
       if (isAmountChanged || isDateChanged || isTypeChanged) {
         await connection.rollback();
         return res.status(409).json({
-          error: 'This transaction is linked to a recurring subscription. Amount, date, and type are locked. To reverse this payment, use the subscription undo-payment action.'
+          error: 'This transaction is linked to a subscription. Amount, date, and type are locked. To reverse this payment, use the subscription undo-payment action.'
         });
       }
     }
@@ -710,7 +710,7 @@ exports.deleteTransaction = async (req, res) => {
     if (tx.subscription_id != null) {
       await connection.rollback();
       return res.status(409).json({
-        error: 'This transaction is linked to a recurring subscription. To remove this payment and roll back the schedule, undo the payment from the subscription screen.'
+        error: 'This transaction is linked to a subscription. To remove this payment and roll back the schedule, undo the payment from the subscription screen.'
       });
     }
 
