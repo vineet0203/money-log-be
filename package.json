@@ -16,7 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@sendgrid/mail": "^8.1.6",
+    "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dayjs": "^1.11.21",
@@ -29,6 +29,7 @@
     "multer": "^2.2.0",
     "mysql2": "^3.22.5",
     "node-cron": "^4.4.1",
+    "nodemailer": "^10.3.1",
     "plaid": "^43.0.0",
     "twilio": "^6.0.2",
     "uuid": "^14.0.1",

@@ -3,8 +3,8 @@ const { Expo } = require('expo-server-sdk');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
-const { sendSMS } = require('../utils/twilio');
-const { sendEmail } = require('../utils/sendgrid');
+const { sendSMS } = require('../services/smsService');
+const { sendNotificationAlertEmail } = require('../services/emailService');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -94,20 +94,14 @@ async function processNotificationQueue() {
           }
           
           console.log(`[Queue Worker] Attempting to send Email to ${job.email}`);
-          const htmlContent = `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <h2 style="color: #333;">Upcoming ${isIncome ? "Income" : "Payment"} Reminder</h2>
-              <p style="font-size: 16px; color: #555;">Hi there,</p>
-              <p style="font-size: 16px; color: #555;">This is a quick reminder that your ${isIncome ? "expected income" : "subscription"} for <strong>${job.subscription_name}</strong> is coming up.</p>
-              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <p style="margin: 0; font-size: 16px;"><strong>${isIncome ? "Amount Expected" : "Amount Due"}:</strong> $${job.amount}</p>
-                <p style="margin: 5px 0 0 0; font-size: 16px;"><strong>Due Date:</strong> ${dbDateStr}</p>
-              </div>
-              <p style="font-size: 14px; color: #777;">Thank you for using Money Log!</p>
-            </div>
-          `;
-          
-          await sendEmail(job.email, `Upcoming ${isIncome ? "Income" : "Payment"} for ${job.subscription_name}`, messageText, htmlContent);
+          await sendNotificationAlertEmail({
+            to: job.email,
+            title: isIncome ? 'Upcoming Income Reminder' : 'Upcoming Payment Reminder',
+            itemName: job.subscription_name,
+            amount: job.amount,
+            dueDate: dbDateStr,
+            alertType: isIncome ? 'income' : 'expense',
+          });
           await markJobStatus(job.id, 'sent');
         } 
         else if (job.type === 'sms') {

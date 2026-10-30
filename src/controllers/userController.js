@@ -36,10 +36,12 @@ exports.updateProfile = async (req, res) => {
       values.push(name.trim());
     }
 
-    if (email !== undefined) {
-      updates.push('email = ?');
-      // If email is provided but empty, convert to null
-      values.push(email && email.trim() !== '' ? email.trim() : null);
+    // Email is the verified primary identity and cannot be changed
+
+    const incomingPhone = req.body.phone_number !== undefined ? req.body.phone_number : req.body.phone;
+    if (incomingPhone !== undefined) {
+      updates.push('phone_number = ?');
+      values.push(incomingPhone && incomingPhone.trim() !== '' ? incomingPhone.trim() : null);
     }
 
     if (profileImageUrl !== undefined) {

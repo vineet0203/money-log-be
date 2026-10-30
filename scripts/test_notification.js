@@ -4,8 +4,9 @@ const { Expo } = require('expo-server-sdk');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
-const { sendEmail } = require('../src/utils/sendgrid');
-const { sendSMS } = require('../src/utils/twilio');
+const { sendEmail, sendNotificationAlertEmail } = require('../src/services/emailService');
+const { renderBaseLayout } = require('../src/templates/emails/baseLayout');
+const { sendSMS } = require('../src/services/smsService');
 const { createSystemNotification } = require('../src/services/notificationService');
 
 dayjs.extend(utc);
@@ -96,20 +97,55 @@ async function notifyUserTest(user) {
     if (user.email) {
       try {
         console.log(`  ... [EMAIL]  Sending test email to ${user.email}...`);
-        const html = `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;">
-            <div style="display: flex; align-items: center; margin-bottom: 16px;">
-              <h2 style="margin: 0; color: #159A1D; font-size: 20px;">MoneyLog Alert Test</h2>
-            </div>
-            <p style="font-size: 15px; color: #374151; line-height: 1.5;">Hi ${user.name || 'there'},</p>
-            <p style="font-size: 15px; color: #374151; line-height: 1.5;">This is a test notification generated from the admin console to verify that your email delivery channel is functioning correctly.</p>
-            <div style="background: #f9fafb; border-left: 4px solid #159A1D; padding: 12px 16px; margin: 20px 0; border-radius: 4px;">
-              <p style="margin: 0; font-size: 14px; color: #1f2937;"><strong>Timestamp:</strong> ${timestampStr}</p>
-              <p style="margin: 4px 0 0 0; font-size: 14px; color: #1f2937;"><strong>Target:</strong> ${user.email}</p>
-            </div>
-            <p style="font-size: 13px; color: #6b7280; margin-top: 24px;">If you did not request this test, you can adjust your preferences under Settings &gt; Notification Settings.</p>
-          </div>
+        const emailContent = `
+          <!-- Test Badge -->
+          <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 16px;">
+            <tr>
+              <td style="background-color: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 9999px; padding: 4px 14px;">
+                <span style="font-size: 12px; font-weight: 700; color: #159A1D; text-transform: uppercase; letter-spacing: 0.5px;">
+                  Channel Verification Test
+                </span>
+              </td>
+            </tr>
+          </table>
+
+          <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #0F172A; letter-spacing: -0.3px;">
+            Money Log Alert Test
+          </h1>
+
+          <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #475569;">
+            Hi <strong style="color: #0F172A;">${user.name || 'there'}</strong>,
+          </p>
+
+          <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #475569;">
+            This is an automated test notification generated from the admin console to verify that your email delivery channel is functioning correctly with the Money Log web theme.
+          </p>
+
+          <!-- Details Box -->
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; margin: 24px 0; overflow: hidden;">
+            <tr>
+              <td style="padding: 18px 24px; border-bottom: 1px solid #E2E8F0;">
+                <div style="font-size: 12px; color: #64748B; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 4px;">Timestamp</div>
+                <div style="font-size: 14px; font-weight: 600; color: #0F172A;">${timestampStr}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 18px 24px;">
+                <div style="font-size: 12px; color: #64748B; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 4px;">Target Recipient</div>
+                <div style="font-size: 14px; font-weight: 600; color: #0F172A;">${user.email}</div>
+              </td>
+            </tr>
+          </table>
+
+          <p style="margin: 20px 0 0; font-size: 12px; color: #94A3B8; text-align: center;">
+            Manage your alert preferences anytime under <a href="${process.env.FRONTEND_URL || 'https://moneylog.com'}/settings" style="color: #159A1D; font-weight: 600;">Settings &gt; Notification Settings</a>.
+          </p>
         `;
+        const html = renderBaseLayout({
+          title: '🔔 MoneyLog Test Notification',
+          content: emailContent,
+          previewText: `Test notification generated at ${timestampStr}`,
+        });
         await sendEmail(user.email, '🔔 MoneyLog Test Notification', notificationBody, html);
         console.log(`  ✓ [EMAIL]   Test email sent successfully to ${user.email}`);
         results.email = 'sent';
@@ -310,19 +346,18 @@ async function notifyUserReal(user, options = {}) {
     if (emailEnabled) {
       if (user.email) {
         try {
-          const htmlContent = `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;">
-              <h2 style="color: #159A1D; margin: 0 0 16px 0;">Upcoming ${isIncome ? 'Income' : 'Payment'} Reminder</h2>
-              <p style="font-size: 15px; color: #374151; margin-bottom: 20px;">Hi ${user.name || 'there'}, this is a reminder for your upcoming ${verb}:</p>
-              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-                <p style="margin: 0 0 8px 0; font-size: 16px; color: #0f172a;"><strong>${sub.name}</strong></p>
-                <p style="margin: 0 0 4px 0; font-size: 15px; color: #334155;"><strong>${isIncome ? 'Amount Expected' : 'Amount Due'}:</strong> ${formattedAmount}</p>
-                <p style="margin: 0; font-size: 15px; color: #334155;"><strong>Due Date:</strong> ${sub.billing_date_str} (${dueText})</p>
-              </div>
-              <p style="font-size: 13px; color: #64748b; margin-top: 24px;">Manage your reminder preferences anytime under Settings &gt; Notification Settings.</p>
-            </div>
-          `;
-          await sendEmail(user.email, `Upcoming ${isIncome ? 'Income' : 'Payment'}: ${sub.name}`, message, htmlContent);
+          await sendNotificationAlertEmail({
+            to: user.email,
+            name: user.name,
+            title: isIncome ? 'Upcoming Income' : 'Upcoming Renewal Reminder',
+            itemName: sub.name,
+            amount: sub.amount,
+            dueDate: `${sub.billing_date_str} (${dueText})`,
+            alertType: isIncome ? 'income' : 'expense',
+            description: `Hi ${user.name || 'there'}, this is a reminder for your upcoming ${verb}:`,
+            ctaUrl: `${process.env.FRONTEND_URL || 'https://moneylog.com'}/subscriptions`,
+            ctaText: isIncome ? 'View Incomes' : 'View Subscriptions',
+          });
           console.log(`    ✓ [EMAIL]   Reminder email sent to ${user.email}`);
         } catch (e) {
           console.error(`    ✗ [EMAIL]   Failed to send email to ${user.email}:`, e.message);

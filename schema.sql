@@ -1,7 +1,7 @@
 -- ========================================================
 -- MONEY LOG UNIFIED DATABASE SCHEMA
 -- Single Source of Truth for Personal Finance & POS Subsystems
--- Total Tables: 33
+-- Total Tables: 34
 -- ========================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -13,9 +13,17 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
   `id` INT NOT NULL AUTO_INCREMENT,
-  `phone_number` VARCHAR(20) NOT NULL,
+  `phone_number` VARCHAR(20) DEFAULT NULL,
   `name` VARCHAR(100) DEFAULT NULL,
-  `email` VARCHAR(255) DEFAULT NULL,
+  `email` VARCHAR(255) NOT NULL,
+  `password_hash` VARCHAR(255) NOT NULL,
+  `token_version` INT NOT NULL DEFAULT 1,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  `deleted_at` DATETIME DEFAULT NULL,
+  `email_verified_at` TIMESTAMP NULL DEFAULT NULL,
+  `failed_login_attempts` INT NOT NULL DEFAULT 0,
+  `locked_until` DATETIME DEFAULT NULL,
   `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `profile_image_url` VARCHAR(255) DEFAULT NULL,
@@ -24,8 +32,8 @@ CREATE TABLE `users` (
   `global_push_enabled` TINYINT(1) DEFAULT 0,
   `timezone` VARCHAR(100) DEFAULT 'UTC',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_users_phone` (`phone_number`),
-  UNIQUE KEY `uniq_users_email` (`email`)
+  UNIQUE KEY `uniq_users_email` (`email`),
+  UNIQUE KEY `uniq_users_phone` (`phone_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 DROP TABLE IF EXISTS `user_push_tokens`;
@@ -39,15 +47,47 @@ CREATE TABLE `user_push_tokens` (
   CONSTRAINT `fk_push_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+DROP TABLE IF EXISTS `password_reset_tokens`;
+CREATE TABLE `password_reset_tokens` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `token_hash` VARCHAR(255) NOT NULL,
+  `expires_at` DATETIME NOT NULL,
+  `used_at` DATETIME NULL DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  INDEX `idx_reset_token_lookup` (`token_hash`, `expires_at`, `used_at`),
+  CONSTRAINT `fk_password_reset_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DROP TABLE IF EXISTS `email_verification_otps`;
+CREATE TABLE `email_verification_otps` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `otp_hash` VARCHAR(255) NOT NULL,
+  `attempts` INT NOT NULL DEFAULT 0,
+  `expires_at` DATETIME NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  INDEX `idx_email_otp_lookup` (`user_id`, `expires_at`),
+  CONSTRAINT `fk_email_otp_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 DROP TABLE IF EXISTS `refresh_tokens`;
 CREATE TABLE `refresh_tokens` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `user_id` INT NOT NULL,
   `token_hash` VARCHAR(255) NOT NULL,
+  `device_name` VARCHAR(100) DEFAULT NULL,
+  `device_type` ENUM('web', 'mobile', 'tablet', 'desktop') NOT NULL DEFAULT 'web',
+  `ip_address` VARCHAR(45) DEFAULT NULL,
+  `is_revoked` TINYINT(1) NOT NULL DEFAULT 0,
   `expires_at` DATETIME NOT NULL,
-  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_used_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_refresh_tokens_user` (`user_id`),
+  KEY `idx_refresh_tokens_hash` (`token_hash`),
   CONSTRAINT `fk_refresh_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
