@@ -4,7 +4,7 @@ const cron = require('node-cron');
 const { seedNotificationQueue } = require('./src/jobs/queue_seeder');
 const { processNotificationQueue } = require('./src/jobs/queue_worker');
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4001;
 
 const { processRecurringJob } = require('./src/services/recurringService');
 
@@ -23,7 +23,7 @@ cron.schedule('*/5 * * * *', () => {
   processNotificationQueue();
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`Server is running on port ${PORT}`);
   console.log('Notification jobs scheduled.');
 });
