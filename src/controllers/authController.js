@@ -194,7 +194,8 @@ exports.signup = async (req, res) => {
  * Verifies 6-digit email OTP and issues initial device authentication session tokens
  */
 exports.verifyEmailOtp = async (req, res) => {
-  const { email, otp } = req.body;
+  const email = req.body.email;
+  const otp = req.body.otp || req.body.code;
 
   try {
     // 1. Look up user

@@ -23,7 +23,11 @@ const app = express();
 app.set('trust proxy', 1);
 
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow mobile apps, curl, or requests with no origin header
+    if (!origin) return callback(null, true);
+    return callback(null, true);
+  },
   credentials: true,
 };
 

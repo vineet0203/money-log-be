@@ -84,16 +84,27 @@ const refreshTokenSchema = z.object({
 
 // Schema for verifying email via 6-digit OTP
 const verifyEmailOtpSchema = z.object({
-  body: z.object({
-    email: z
-      .string({ required_error: 'Email is required' })
-      .email('Invalid email address')
-      .transform((val) => val.trim().toLowerCase()),
-    otp: z
-      .string({ required_error: 'Verification code is required' })
-      .length(6, 'Verification code must be 6 digits')
-      .regex(/^\d{6}$/, 'Verification code must be 6 digits'),
-  }),
+  body: z
+    .object({
+      email: z
+        .string({ required_error: 'Email is required' })
+        .email('Invalid email address')
+        .transform((val) => val.trim().toLowerCase()),
+      otp: z
+        .string()
+        .length(6, 'Verification code must be 6 digits')
+        .regex(/^\d{6}$/, 'Verification code must be 6 digits')
+        .optional(),
+      code: z
+        .string()
+        .length(6, 'Verification code must be 6 digits')
+        .regex(/^\d{6}$/, 'Verification code must be 6 digits')
+        .optional(),
+    })
+    .refine((data) => Boolean(data.otp || data.code), {
+      message: 'Verification code is required',
+      path: ['otp'],
+    }),
 });
 
 // Schema for resending email verification 6-digit OTP
