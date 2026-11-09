@@ -101,8 +101,12 @@ exports.updateProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating user profile:', error);
-    if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'Email is already in use by another account' });
+    if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+      const msg = (error.sqlMessage || error.message || '').toLowerCase();
+      if (msg.includes('uniq_users_phone') || msg.includes('phone')) {
+        return res.status(409).json({ error: 'This mobile number is already in use by another account.' });
+      }
+      return res.status(409).json({ error: 'Email or mobile number is already in use by another account.' });
     }
     res.status(500).json({ error: 'Internal server error' });
   }

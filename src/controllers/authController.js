@@ -116,42 +116,115 @@ async function seedDefaultCategories(userId) {
 
 /**
  * POST /auth/signup
- * Register a new user with email, password, and name, then send a 6-digit email OTP
+ * Register a new user with email, password, name, and phone number, then send a 6-digit email OTP
  */
 exports.signup = async (req, res) => {
-  const { email, password, name, phone } = req.body;
+  const { email, password, name, phone, phone_number } = req.body;
+  const rawPhone = phone || phone_number || null;
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const cleanPhone = rawPhone && String(rawPhone).trim() !== '' ? String(rawPhone).trim() : null;
 
   try {
-    // 1. Check for existing email conflict
-    const [existing] = await pool.query(
-      'SELECT id, email_verified_at, is_deleted FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1',
-      [email]
+    // 1. Check for existing accounts with matching email or phone number
+    let checkQuery =
+      'SELECT id, email, phone_number, email_verified_at, is_deleted FROM users WHERE LOWER(email) = LOWER(?)';
+    const checkParams = [cleanEmail];
+
+    if (cleanPhone) {
+      checkQuery += ' OR phone_number = ?';
+      checkParams.push(cleanPhone);
+    }
+
+    const [existingUsers] = await pool.query(checkQuery, checkParams);
+
+    const emailMatch = existingUsers.find(
+      (u) => u.email && u.email.toLowerCase() === cleanEmail
     );
+    const phoneMatch = cleanPhone
+      ? existingUsers.find((u) => u.phone_number && u.phone_number === cleanPhone)
+      : null;
+
+    // 1a. Handle previously deleted accounts
+    if (emailMatch && emailMatch.is_deleted === 1) {
+      return res.status(409).json({
+        error: 'This account was previously deleted. Please contact support.',
+        message: 'This account was previously deleted. Please contact support.',
+      });
+    }
+    if (phoneMatch && phoneMatch.is_deleted === 1) {
+      return res.status(409).json({
+        error: 'This mobile number is associated with a deleted account. Please contact support.',
+        message: 'This mobile number is associated with a deleted account. Please contact support.',
+        conflict: 'phone',
+        fields: {
+          phone: 'This mobile number is associated with a deleted account.',
+        },
+      });
+    }
+
+    // 1b. Check if email and/or phone are already registered to active/verified users
+    const isEmailTaken = Boolean(emailMatch && emailMatch.email_verified_at !== null);
+    const isPhoneTaken = Boolean(
+      phoneMatch && (
+        phoneMatch.email_verified_at !== null ||
+        !emailMatch ||
+        phoneMatch.id !== emailMatch.id
+      )
+    );
+
+    // Both email address and phone number are already registered
+    if (isEmailTaken && isPhoneTaken) {
+      return res.status(409).json({
+        error: 'Email address and mobile number must be unique. Both this email and phone number are already registered.',
+        message: 'Email address and mobile number must be unique. Both this email and phone number are already registered.',
+        conflict: 'both',
+        fields: {
+          email: 'This email address is already registered.',
+          phone: 'This mobile number is already registered.',
+        },
+      });
+    }
+
+    // Only email address is already registered
+    if (isEmailTaken) {
+      return res.status(409).json({
+        error: 'An account with this email address already exists. Email must be unique.',
+        message: 'An account with this email address already exists. Email must be unique.',
+        conflict: 'email',
+        fields: {
+          email: 'This email address is already registered.',
+        },
+      });
+    }
+
+    // Only phone number is already registered
+    if (isPhoneTaken) {
+      return res.status(409).json({
+        error: 'An account with this mobile number already exists. Mobile number must be unique.',
+        message: 'An account with this mobile number already exists. Mobile number must be unique.',
+        conflict: 'phone',
+        fields: {
+          phone: 'This mobile number is already registered.',
+        },
+      });
+    }
 
     let userId;
     const passwordHash = await bcrypt.hash(password, 12);
 
-    if (existing.length > 0) {
-      const existingUser = existing[0];
-      if (existingUser.is_deleted === 1) {
-        return res.status(409).json({ error: 'This account was previously deleted. Please contact support.' });
-      }
-      if (existingUser.email_verified_at !== null) {
-        return res.status(409).json({ error: 'An account with this email address already exists.' });
-      }
-
-      // If user registered earlier but never verified email, update info and resend fresh OTP
-      userId = existingUser.id;
+    if (emailMatch) {
+      // User registered earlier with this email but never verified; update info and resend fresh OTP
+      userId = emailMatch.id;
       await pool.query(
         'UPDATE users SET password_hash = ?, name = ?, phone_number = ? WHERE id = ?',
-        [passwordHash, name, phone || null, userId]
+        [passwordHash, name, cleanPhone, userId]
       );
     } else {
       // 2. Insert new user record (email_verified_at = NULL)
       const [insertResult] = await pool.query(
         `INSERT INTO users (email, password_hash, name, phone_number, token_version, is_active)
          VALUES (?, ?, ?, ?, 1, 1)`,
-        [email, passwordHash, name, phone || null]
+        [cleanEmail, passwordHash, name, cleanPhone]
       );
       userId = insertResult.insertId;
     }
@@ -170,7 +243,7 @@ exports.signup = async (req, res) => {
 
     // 5. Send 6-digit verification code to email via Rackspace SMTP
     sendVerificationEmail({
-      to: email,
+      to: cleanEmail,
       name,
       code: otp,
       expiresInMinutes: 10,
@@ -180,11 +253,59 @@ exports.signup = async (req, res) => {
 
     return res.status(201).json({
       message: 'Account created successfully. A 6-digit verification code has been sent to your email.',
-      email,
+      email: cleanEmail,
       requiresEmailVerification: true,
     });
   } catch (error) {
     console.error('Error during signup:', error);
+
+    // Fallback handler for unique key duplicate constraints (e.g. race conditions)
+    if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+      const msg = (error.sqlMessage || error.message || '').toLowerCase();
+      const isPhoneDup = msg.includes('uniq_users_phone') || msg.includes('phone');
+      const isEmailDup = msg.includes('uniq_users_email') || msg.includes('email');
+
+      if (isPhoneDup && isEmailDup) {
+        return res.status(409).json({
+          error: 'Email address and mobile number must be unique. Both this email and phone number are already registered.',
+          message: 'Email address and mobile number must be unique. Both this email and phone number are already registered.',
+          conflict: 'both',
+          fields: {
+            email: 'This email address is already registered.',
+            phone: 'This mobile number is already registered.',
+          },
+        });
+      }
+
+      if (isPhoneDup) {
+        return res.status(409).json({
+          error: 'An account with this mobile number already exists. Mobile number must be unique.',
+          message: 'An account with this mobile number already exists. Mobile number must be unique.',
+          conflict: 'phone',
+          fields: {
+            phone: 'This mobile number is already registered.',
+          },
+        });
+      }
+
+      if (isEmailDup) {
+        return res.status(409).json({
+          error: 'An account with this email address already exists. Email must be unique.',
+          message: 'An account with this email address already exists. Email must be unique.',
+          conflict: 'email',
+          fields: {
+            email: 'This email address is already registered.',
+          },
+        });
+      }
+
+      return res.status(409).json({
+        error: 'Email address or mobile number is already registered. Both must be unique.',
+        message: 'Email address or mobile number is already registered. Both must be unique.',
+        conflict: 'both',
+      });
+    }
+
     return res.status(500).json({ error: 'Failed to create account. Please try again.' });
   }
 };

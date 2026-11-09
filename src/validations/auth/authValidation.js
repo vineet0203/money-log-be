@@ -19,7 +19,8 @@ const signupSchema = z.object({
       .min(1, 'Name is required')
       .max(100)
       .transform((val) => val.trim()),
-    phone: z.string().max(20).optional().transform((val) => (val ? val.trim() : val)),
+    phone: z.string().max(25).optional().nullable().transform((val) => (val ? val.trim() : val)),
+    phone_number: z.string().max(25).optional().nullable().transform((val) => (val ? val.trim() : val)),
   }),
 });
 
