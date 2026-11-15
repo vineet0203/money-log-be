@@ -120,6 +120,7 @@ exports.getProducts = async (req, res) => {
       status: 'p.status',
       selling_price: 'min_price',
       stock_quantity: 'total_stock',
+      id: 'p.id',
     };
     const orderColumn = allowedSortFields[sortBy] || 'p.created_at';
     const direction = sortOrder.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
@@ -164,7 +165,7 @@ exports.getProducts = async (req, res) => {
             : ''
           : ''
       }
-      ORDER BY ${orderColumn} ${direction}
+      ORDER BY ${orderColumn} ${direction}${orderColumn !== 'p.id' ? `, p.id ${direction}` : ''}
       LIMIT ? OFFSET ?
     `;
 
@@ -204,15 +205,22 @@ exports.getProducts = async (req, res) => {
         });
       }
 
-      // Format product results
+      // Format product results with nested variants
       for (const prod of products) {
         prod.options_config = parseJson(prod.options_config, []);
         prod.is_taxable = Boolean(prod.is_taxable);
         prod.tax_rate = prod.tax_rate !== null ? Number(prod.tax_rate) : null;
-        prod.variants_count = Number(prod.variants_count);
-        prod.total_stock = Number(prod.total_stock);
-        prod.min_price = Number(prod.min_price);
-        prod.max_price = Number(prod.max_price);
+        prod.variants = variantsByProductId[prod.id] || [];
+        prod.variants_count = prod.variants.length;
+        if (prod.variants.length > 0) {
+          prod.total_stock = prod.variants.reduce((sum, v) => sum + (v.stock_quantity || 0), 0);
+          prod.min_price = Math.min(...prod.variants.map((v) => v.selling_price));
+          prod.max_price = Math.max(...prod.variants.map((v) => v.selling_price));
+        } else {
+          prod.total_stock = Number(prod.total_stock);
+          prod.min_price = Number(prod.min_price);
+          prod.max_price = Number(prod.max_price);
+        }
         prod.min_stock_alert = Number(prod.min_stock_alert);
 
         // Derive stock status
@@ -223,8 +231,6 @@ exports.getProducts = async (req, res) => {
         } else {
           prod.stock_status = 'in_stock';
         }
-
-        prod.variants = variantsByProductId[prod.id] || [];
       }
     }
 
